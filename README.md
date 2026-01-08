@@ -6,10 +6,10 @@ No external dependencies - pure Python standard library.
 
 ## Installation
 
-### From GitHub
+### From PyPI
 
 ```bash
-pip install git+https://github.com/thbtmntgn/biathlon.git
+pip install biathlon
 ```
 
 ### From source
