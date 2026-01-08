@@ -42,34 +42,28 @@ List World Cup events from the current season:
 biathlon events
 ```
 
-List World Cup events for specific seasons:
+List World Cup events for a specific season:
 
 ```bash
-biathlon events --seasons 2425,2324
+biathlon events --season 2425
 ```
 
-List IBU Cup and IBU Cup Junior events for the current season:
+List IBU Cup events for the current season:
 
 ```bash
-biathlon events --levels 2,3
+biathlon events --level 2
 ```
 
-List races (all event types) for the current season World Cup:
+List events with their races for the current season World Cup:
 
 ```bash
-biathlon races
+biathlon events --races
 ```
 
-List sprint and mass-start races across specific seasons:
+List sprint races for a specific season:
 
 ```bash
-biathlon races --seasons 2425,2324 --types sprint,mass
-```
-
-List races for specific events:
-
-```bash
-biathlon races --events BT2526SWRLCP01,BT2526SWRLCP02
+biathlon events --season 2425 --races --discipline sprint
 ```
 
 Show results for the most recent World Cup race:
@@ -84,10 +78,10 @@ Show results for a specific race id:
 biathlon results --race BT2526SWRLCP01SWSP
 ```
 
-Show course/range/shooting time breakdowns for a race:
+Show ski/range/shooting time breakdowns for a race:
 
 ```bash
-biathlon results course --race BT2526SWRLCP03SMMS
+biathlon results ski --race BT2526SWRLCP03SMMS
 biathlon results range --race BT2526SWRLCP03SMMS
 biathlon results shooting --race BT2526SWRLCP03SMMS
 ```
@@ -101,7 +95,7 @@ biathlon scores
 Show men sprint standings for season 2425:
 
 ```bash
-biathlon scores --season 2425 --gender men --type sprint
+biathlon scores --season 2425 --men --sort sprint
 ```
 
 Run without installing:
