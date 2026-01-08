@@ -470,6 +470,9 @@ def handle_cumulate_remontada(args: argparse.Namespace) -> int:
                 finish_rank = as_int(res.get("Rank") or res.get("ResultOrder"))
                 if start_rank is None or finish_rank is None:
                     continue
+                # Skip placeholder values from unfinished races
+                if finish_rank > 500:
+                    continue
                 gain = start_rank - finish_rank
                 ident = res.get("IBUId") or res.get("Bib") or res.get("Name")
                 if not ident:
