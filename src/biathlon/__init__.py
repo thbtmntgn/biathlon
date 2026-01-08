@@ -1,0 +1,1 @@
+"""Biathlon CLI package."""
