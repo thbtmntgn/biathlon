@@ -115,6 +115,26 @@ def handle_events(args: argparse.Namespace) -> int:
     def date_only(value: str | None) -> str:
         return value.split("T", 1)[0] if isinstance(value, str) else ""
 
+    def date_with_time(value: str | None) -> str:
+        if not isinstance(value, str):
+            return ""
+        # If no time component, just return the date
+        if "T" not in value:
+            return value.split(" ", 1)[0]
+        try:
+            # Handle Z suffix for UTC
+            iso_str = value.replace("Z", "+00:00")
+            dt = datetime.datetime.fromisoformat(iso_str)
+            # If no timezone info, assume UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            # Convert to local timezone
+            local_dt = dt.astimezone()
+            return local_dt.strftime("%Y-%m-%d %H:%M")
+        except ValueError:
+            # Fallback: just extract date part
+            return value.split("T", 1)[0]
+
     if args.completed:
         today = datetime.date.today()
         events = [ev for ev in events if (d := event_date(ev)) is not None and d <= today]
@@ -149,7 +169,7 @@ def handle_events(args: argparse.Namespace) -> int:
 
     # Auto-enable --races when -d/--discipline is used
     if args.races or args.discipline:
-        return _handle_events_with_races(events, args, pretty, date_only)
+        return _handle_events_with_races(events, args, pretty, date_only, date_with_time)
 
     rows = []
     for event in events:
@@ -244,7 +264,7 @@ def _handle_events_summary(events: list[dict], pretty: bool, date_only) -> int:
     return 0
 
 
-def _handle_events_with_races(events: list[dict], args, pretty: bool, date_only) -> int:
+def _handle_events_with_races(events: list[dict], args, pretty: bool, date_only, date_with_time) -> int:
     """Handle --races flag for events command."""
     type_filter = None
     if args.discipline:
@@ -265,11 +285,24 @@ def _handle_events_with_races(events: list[dict], args, pretty: bool, date_only)
     rows = []
     row_styles = []
 
-    # Compute event styles upfront
-    event_styles = compute_event_styles(events) if pretty else None
+    def parse_race_datetime(race: dict) -> datetime.datetime | None:
+        """Parse race start time as a datetime object."""
+        raw = race.get("StartTime") or race.get("StartDate") or race.get("FirstStart") or ""
+        if not isinstance(raw, str) or "T" not in raw:
+            return None
+        try:
+            iso_str = raw.replace("Z", "+00:00")
+            dt = datetime.datetime.fromisoformat(iso_str)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            return dt
+        except ValueError:
+            return None
 
-    for idx, event in enumerate(events):
-        event_style = event_styles[idx] if event_styles else ""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    found_next_race = False
+
+    for event in events:
         event_id = event.get("EventId")
         event_label = event.get("Description") or ""
         short_label = event.get("ShortDescription") or event.get("Organizer") or ""
@@ -284,23 +317,36 @@ def _handle_events_with_races(events: list[dict], args, pretty: bool, date_only)
                 event.get("SeasonId", ""), level, event_label, short_label, country,
                 event_start, race_count, "", "", "", "", event_id or "",
             ])
-            row_styles.append(event_style)
+            row_styles.append("dim")
             continue
 
         for race in race_list:
             race_label = get_race_label(race)
-            race_start = date_only(
+            race_start = date_with_time(
                 race.get("StartTime") or race.get("StartDate") or race.get("FirstStart") or ""
             )
             disc_id = race.get("DisciplineId") or ""
             if type_filter and str(disc_id).upper() not in type_filter:
                 continue
+
+            # Compute race style based on start time
+            race_style = ""
+            if pretty:
+                race_dt = parse_race_datetime(race)
+                if race_dt is None:
+                    race_style = "dim"
+                elif race_dt < now:
+                    race_style = "dim"
+                elif not found_next_race:
+                    race_style = "highlight"
+                    found_next_race = True
+
             rows.append([
                 event.get("SeasonId", ""), level, event_label, short_label, country,
                 event_start, race_count, race_label, race_start,
                 disc_id, race.get("RaceId") or race.get("Id") or "", event_id or "",
             ])
-            row_styles.append(event_style)
+            row_styles.append(race_style)
 
     render_table(headers, rows, pretty=pretty, row_styles=row_styles if pretty else None)
     return 0
