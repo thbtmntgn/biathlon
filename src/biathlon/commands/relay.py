@@ -190,21 +190,47 @@ def handle_relay(args: argparse.Namespace) -> int:
         # Get leg athletes
         team_legs = legs_by_bib.get(bib, [])
         leg_names = []
-        leg_times = []
+        leg_cumulative_times = []  # Cumulative times from API
+        leg_behinds = []
+        leg_misses = []
         leg_ranks = []
         for i in range(1, num_legs + 1):
             leg_data = next((l for l in team_legs if l.get("Leg") == i), None)
             if leg_data:
                 name = leg_data.get("ShortName") or leg_data.get("Name") or "-"
                 leg_time = leg_data.get("TotalTime") or "-"
+                leg_behind = leg_data.get("Behind") or "-"
+                leg_miss = parse_misses(leg_data.get("ShootingTotal")) or 0
                 leg_rank = leg_data.get("LegRank") or "-"
                 leg_names.append(name)
-                leg_times.append(leg_time)
+                leg_cumulative_times.append(leg_time)
+                leg_behinds.append(leg_behind)
+                leg_misses.append(leg_miss)
                 leg_ranks.append(leg_rank)
             else:
                 leg_names.append("-")
-                leg_times.append("-")
+                leg_cumulative_times.append("-")
+                leg_behinds.append("-")
+                leg_misses.append("-")
                 leg_ranks.append("-")
+
+        # Calculate individual leg times (delta from previous leg)
+        leg_times = []
+        for i in range(num_legs):
+            curr_time = parse_time_seconds(leg_cumulative_times[i]) if leg_cumulative_times[i] != "-" else None
+            if i == 0:
+                # First leg: use cumulative time as-is
+                leg_times.append(leg_cumulative_times[i])
+            else:
+                prev_time = parse_time_seconds(leg_cumulative_times[i - 1]) if leg_cumulative_times[i - 1] != "-" else None
+                if curr_time is not None and prev_time is not None:
+                    delta = curr_time - prev_time
+                    # Format as mm:ss.t
+                    minutes = int(delta // 60)
+                    secs = delta - minutes * 60
+                    leg_times.append(f"{minutes}:{secs:04.1f}")
+                else:
+                    leg_times.append("-")
 
         row = {
             "rank": team_rank,
@@ -217,6 +243,8 @@ def handle_relay(args: argparse.Namespace) -> int:
         for i in range(num_legs):
             row[f"leg{i+1}_name"] = leg_names[i]
             row[f"leg{i+1}_time"] = leg_times[i]
+            row[f"leg{i+1}_behind"] = leg_behinds[i]
+            row[f"leg{i+1}_miss"] = leg_misses[i]
             row[f"leg{i+1}_rank"] = leg_ranks[i]
         rows.append(row)
 
@@ -227,40 +255,49 @@ def handle_relay(args: argparse.Namespace) -> int:
         "misses": "misses",
     }
     for i in range(1, num_legs + 1):
-        col_map[f"l{i}time"] = f"leg{i}_time"
-        col_map[f"l{i}rank"] = f"leg{i}_rank"
-        col_map[f"leg{i}time"] = f"leg{i}_time"
-        col_map[f"leg{i}rank"] = f"leg{i}_rank"
+        # New column names: Time1, B1, M1
+        col_map[f"time{i}"] = f"leg{i}_time"
+        col_map[f"b{i}"] = f"leg{i}_behind"
+        col_map[f"m{i}"] = f"leg{i}_miss"
 
     # Handle --sort
     sort_col = getattr(args, "sort", "").lower()
     show_sort_rank = False
+    sort_rank_header = "Rank"
     if sort_col:
         row_key = col_map.get(sort_col)
         if not row_key:
-            valid_cols = ["time", "behind", "misses"] + [f"L{i}Time" for i in range(1, num_legs + 1)] + [f"L{i}Rank" for i in range(1, num_legs + 1)]
+            valid_cols = ["time", "behind", "misses"]
+            for i in range(1, num_legs + 1):
+                valid_cols.extend([f"Time{i}", f"B{i}", f"M{i}"])
             print(f"error: sort must be one of {', '.join(valid_cols)}", file=sys.stderr)
             return 1
 
+        # Determine sort rank header name
+        sort_col_map = {
+            "time": "Time", "behind": "Behind", "misses": "Misses",
+        }
+        for i in range(1, num_legs + 1):
+            sort_col_map[f"time{i}"] = f"Time{i}"
+            sort_col_map[f"b{i}"] = f"B{i}"
+            sort_col_map[f"m{i}"] = f"M{i}"
+        sort_header = sort_col_map.get(sort_col, sort_col.capitalize())
+        sort_rank_header = f"{sort_header}Rank"
+
         # Sort by the specified column
-        if row_key == "misses":
+        if row_key == "misses" or row_key.endswith("_miss"):
             # Sort by misses (numeric), then by original rank
             def sort_key(r: dict) -> tuple:
-                miss_val = r.get("misses", 0)
+                miss_val = r.get(row_key, 0)
+                try:
+                    miss_val = int(miss_val) if miss_val not in ("", None, "-") else 9999
+                except (TypeError, ValueError):
+                    miss_val = 9999
                 try:
                     rank_val = int(r.get("rank", 9999))
                 except (TypeError, ValueError):
                     rank_val = 9999
                 return (miss_val, rank_val)
-            rows = sorted(rows, key=sort_key)
-        elif row_key.endswith("_rank"):
-            # Sort by rank column (numeric)
-            def sort_key(r: dict) -> tuple:
-                val = r.get(row_key, "-")
-                try:
-                    return (0, int(val))
-                except (TypeError, ValueError):
-                    return (1, 9999)
             rows = sorted(rows, key=sort_key)
         else:
             # Sort by time column
@@ -284,12 +321,32 @@ def handle_relay(args: argparse.Namespace) -> int:
 
     # Build headers and render
     print(format_race_header(payload, race_id))
+    show_detail = getattr(args, "detail", False)
+    show_time = getattr(args, "time", False) or show_detail
+    show_behind = getattr(args, "behind", False) or show_detail
+    show_miss = getattr(args, "miss", False) or show_detail
+    show_leg_details = show_time or show_behind or show_miss
+
     if show_sort_rank:
-        headers = ["Rank", "Position", "Team", "Country", "Time", "Behind", "Misses"]
+        headers = [sort_rank_header, "FinalRank", "Team", "Country", "Time", "Behind", "Misses"]
     else:
         headers = ["Rank", "Team", "Country", "Time", "Behind", "Misses"]
-    for i in range(1, num_legs + 1):
-        headers.extend([f"Leg{i}", f"L{i}Time", f"L{i}Rank"])
+    if show_leg_details:
+        for i in range(1, num_legs + 1):
+            headers.append(f"Biathlete{i}")
+            if show_time:
+                headers.append(f"Time{i}")
+            if show_behind and i < num_legs:  # Skip Behind for last leg (same as main)
+                headers.append(f"B{i}")
+            if show_miss:
+                headers.append(f"M{i}")
+
+    # Find index of sorted column header for highlighting
+    highlight_headers = None
+    if show_sort_rank:
+        sort_header = sort_col_map.get(sort_col)
+        if sort_header and sort_header in headers:
+            highlight_headers = [headers.index(sort_header)]
 
     render_rows = []
     for row in rows:
@@ -312,14 +369,17 @@ def handle_relay(args: argparse.Namespace) -> int:
                 row["behind"],
                 row["misses"],
             ]
-        for i in range(1, num_legs + 1):
-            render_row.extend([
-                row[f"leg{i}_name"],
-                row[f"leg{i}_time"],
-                row[f"leg{i}_rank"],
-            ])
+        if show_leg_details:
+            for i in range(1, num_legs + 1):
+                render_row.append(row[f"leg{i}_name"])
+                if show_time:
+                    render_row.append(row[f"leg{i}_time"])
+                if show_behind and i < num_legs:  # Skip Behind for last leg (same as main)
+                    render_row.append(row[f"leg{i}_behind"])
+                if show_miss:
+                    render_row.append(row[f"leg{i}_miss"])
         render_rows.append(render_row)
 
     row_styles = [rank_style(row["rank"]) for row in rows]
-    render_table(headers, render_rows, pretty=is_pretty_output(args), row_styles=row_styles)
+    render_table(headers, render_rows, pretty=is_pretty_output(args), row_styles=row_styles, highlight_headers=highlight_headers)
     return 0

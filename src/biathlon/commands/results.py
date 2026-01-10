@@ -30,6 +30,31 @@ from ..utils import (
 )
 
 
+def _format_time(seconds: float) -> str:
+    """Format seconds as mm:ss.d or h:mm:ss.d."""
+    if seconds >= 3600:
+        hours = int(seconds // 3600)
+        remaining = seconds - hours * 3600
+        minutes = int(remaining // 60)
+        secs = remaining - minutes * 60
+        return f"{hours}:{minutes:02d}:{secs:04.1f}"
+    minutes = int(seconds // 60)
+    secs = seconds - minutes * 60
+    return f"{minutes}:{secs:04.1f}"
+
+
+def _calculate_pursuit_time(result_time: str, start_delay: str) -> str:
+    """Calculate pursuit time (result - start delay)."""
+    result_secs = parse_time_seconds(result_time)
+    delay_secs = parse_time_seconds(start_delay)
+    if result_secs is None or delay_secs is None:
+        return "-"
+    pursuit_secs = result_secs - delay_secs
+    if pursuit_secs < 0:
+        return "-"
+    return _format_time(pursuit_secs)
+
+
 def _get_top_n_ibu_ids(cat_id: str, n: int, season_id: str = "") -> set[str]:
     """Return IBUIds of top N athletes in World Cup total standings.
 
@@ -247,13 +272,16 @@ def handle_results(args: argparse.Namespace) -> int:
     for result in results:
         identifier = result.get("IBUId") or result.get("Bib") or result.get("Name")
         times = analytic_times.get(identifier, {})
+        result_time = normalize_result_time(result, base_secs)
+        start_delay = result.get("StartInfo") or "-" if is_pursuit else None
         row = {
             "rank": result.get("Rank") or result.get("ResultOrder") or "",
             "name": result.get("Name") or result.get("ShortName") or "",
             "nat": result.get("Nat") or "",
             "start_position": result.get("StartOrder") or "-" if is_pursuit else None,
-            "start_delay": result.get("StartInfo") or "-" if is_pursuit else None,
-            "result": normalize_result_time(result, base_secs),
+            "start_delay": start_delay,
+            "pursuit_time": _calculate_pursuit_time(result_time, start_delay) if is_pursuit else None,
+            "result": result_time,
             "course": times.get("course") or get_first_time(result, ["TotalCourseTime", "CourseTime", "RunTime"]) or "-",
             "range": times.get("range") or get_first_time(result, ["TotalRangeTime", "RangeTime"]) or "-",
             "shooting": times.get("shooting") or get_first_time(result, ["TotalShootingTime", "ShootingTime"]) or "-",
@@ -266,8 +294,10 @@ def handle_results(args: argparse.Namespace) -> int:
         sort_col = args.sort.lower()
         if sort_col == "ski":
             sort_col = "course"
-        if sort_col not in {"result", "course", "range", "shooting", "misses"}:
-            print("error: sort must be one of result, ski, range, shooting, misses", file=sys.stderr)
+        elif sort_col == "pursuit":
+            sort_col = "pursuit_time"
+        if sort_col not in {"result", "course", "range", "shooting", "misses", "pursuit_time"}:
+            print("error: sort must be one of result, ski, range, shooting, misses, pursuit", file=sys.stderr)
             return 1
         if sort_col == "misses":
             def time_key(value: object) -> float:
@@ -299,7 +329,7 @@ def handle_results(args: argparse.Namespace) -> int:
 
     print(format_race_header(payload, race_id))
     show_sort_rank = bool(args.sort)
-    sort_col_map = {"result": "Result", "ski": "Ski", "range": "Range", "shooting": "Shooting", "misses": "Misses"}
+    sort_col_map = {"result": "Result", "ski": "Ski", "range": "Range", "shooting": "Shooting", "misses": "Misses", "pursuit": "PursuitTime"}
     if show_sort_rank:
         sort_col = args.sort.lower()
         sort_header = sort_col_map.get(sort_col, sort_col.capitalize())
@@ -309,7 +339,10 @@ def handle_results(args: argparse.Namespace) -> int:
     headers.extend(["Name", "Country"])
     if is_pursuit:
         headers.extend(["StartRank", "StartDelay"])
-    headers.extend(["Result", "Ski", "Range", "Shooting", "Misses"])
+    headers.append("Result")
+    if is_pursuit:
+        headers.append("PursuitTime")
+    headers.extend(["Ski", "Range", "Shooting", "Misses"])
 
     # Find index of sorted column header for highlighting
     highlight_headers = None
@@ -329,8 +362,10 @@ def handle_results(args: argparse.Namespace) -> int:
         render_row.extend([row["name"], row["nat"]])
         if is_pursuit:
             render_row.extend([row["start_position"], row["start_delay"]])
+        render_row.append(row["result"])
+        if is_pursuit:
+            render_row.append(row["pursuit_time"])
         render_row.extend([
-            row["result"],
             row["course"],
             row["range"],
             row["shooting"],
