@@ -54,13 +54,16 @@ class TestRankStyle:
         assert rank_style(3) == "bronze"
 
     def test_fourth(self):
-        assert rank_style(4) == "top_five"
+        assert rank_style(4) == "flowers"
 
     def test_fifth(self):
-        assert rank_style(5) == "top_five"
+        assert rank_style(5) == "flowers"
 
     def test_sixth(self):
-        assert rank_style(6) == "other"
+        assert rank_style(6) == "flowers"
+
+    def test_seventh(self):
+        assert rank_style(7) == "other"
 
     def test_string_rank(self):
         assert rank_style("1") == "gold"

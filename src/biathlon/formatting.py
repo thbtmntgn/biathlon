@@ -21,7 +21,7 @@ class Color:
     LIGHT_GOLD = (218, 165, 32)  # Goldenrod - distinct from bold gold
     SILVER = (192, 192, 192)
     BRONZE = (205, 127, 50)
-    TOP_FIVE = (255, 182, 108)
+    FLOWERS = (255, 182, 108)
     OTHER = (215, 215, 215)
     GREEN = (0, 200, 0)
     RED = (220, 60, 60)
@@ -74,9 +74,9 @@ class Color:
         return cls.rgb(text, cls.GOLD, bold=True)
 
     @classmethod
-    def top_five(cls, text: str) -> str:
-        """Apply 4th/5th place style."""
-        return cls.rgb(text, cls.TOP_FIVE, bold=False)
+    def flowers(cls, text: str) -> str:
+        """Apply flowers ceremony style (4th/5th/6th place)."""
+        return cls.rgb(text, cls.FLOWERS, bold=False)
 
     @classmethod
     def other(cls, text: str) -> str:
@@ -178,8 +178,8 @@ def render_table(
                 line = Color.silver(line)
             elif style == "bronze":
                 line = Color.bronze(line)
-            elif style == "top_five":
-                line = Color.top_five(line)
+            elif style == "flowers":
+                line = Color.flowers(line)
             elif style == "other":
                 line = Color.other(line)
         print(line)
@@ -211,7 +211,7 @@ def is_pretty_output(args) -> bool:
 
 
 def rank_style(rank: int | object) -> str:
-    """Return style name for a given rank (1-5 get podium/top colors)."""
+    """Return style name for a given rank (1-6 get podium/flowers colors)."""
     try:
         r = int(rank)  # type: ignore[arg-type]
     except (TypeError, ValueError):
@@ -220,6 +220,7 @@ def rank_style(rank: int | object) -> str:
         1: "gold",
         2: "silver",
         3: "bronze",
-        4: "top_five",
-        5: "top_five",
+        4: "flowers",
+        5: "flowers",
+        6: "flowers",
     }.get(r, "other")

@@ -22,6 +22,7 @@ from .records import handle_record_lap
 from .ceremony import handle_ceremony
 from .athlete import handle_athlete_results, handle_athlete_info
 from .shooting import handle_shooting
+from .relay import handle_relay
 
 __all__ = [
     "handle_seasons",
@@ -43,4 +44,5 @@ __all__ = [
     "handle_athlete_results",
     "handle_athlete_info",
     "handle_shooting",
+    "handle_relay",
 ]

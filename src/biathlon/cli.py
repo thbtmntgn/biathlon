@@ -30,6 +30,7 @@ from .commands import (
     handle_cumulate_ski,
     handle_events,
     handle_record_lap,
+    handle_relay,
     handle_results,
     handle_results_range,
     handle_results_remontada,
@@ -84,7 +85,7 @@ _biathlon_completion() {
     cur="${COMP_WORDS[COMP_CWORD]}"
     prev="${COMP_WORDS[COMP_CWORD-1]}"
 
-    commands="seasons events results cumulate record scores ceremony athlete shooting"
+    commands="seasons events results cumulate record scores ceremony athlete shooting relay"
 
     case "${COMP_WORDS[1]}" in
         results)
@@ -131,6 +132,7 @@ _biathlon() {
         'ceremony:Medal ranking'
         'athlete:Athlete information'
         'shooting:Shooting accuracy'
+        'relay:Relay race results'
     )
 
     _arguments -C \\
@@ -433,6 +435,17 @@ def build_parser() -> argparse.ArgumentParser:
     shooting_parser.add_argument("--debug-races", action="store_true", help="Debug: print races considered")
     add_output_flag(shooting_parser)
     shooting_parser.set_defaults(func=handle_shooting)
+
+    # --- relay ---
+    relay_parser = subparsers.add_parser("relay", help="Relay race results", formatter_class=CompactOptionalFormatter, add_help=False)
+    relay_parser.add_argument("--race", "-r", default="", help="Race id (default: most recent completed relay)")
+    relay_parser.add_argument("--men", action="store_true", help="Show men relay (default: women)")
+    relay_parser.add_argument("--mixed", action="store_true", help="Show mixed relay")
+    relay_parser.add_argument("--singlemixed", action="store_true", help="Show single mixed relay")
+    relay_parser.add_argument("--sort", default="", help="Sort by column (e.g., L1Time, L2Rank, misses)")
+    relay_parser.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    add_output_flag(relay_parser)
+    relay_parser.set_defaults(func=handle_relay)
 
     return parser
 

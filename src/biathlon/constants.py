@@ -2,7 +2,13 @@
 
 # Discipline codes
 RELAY_DISCIPLINE = "RL"
+SINGLE_MIXED_RELAY_DISCIPLINE = "SR"
 INDIVIDUAL_DISCIPLINES = {"SP", "PU", "IN", "MS"}
+
+# Relay category codes
+RELAY_WOMEN_CAT = "SW"
+RELAY_MEN_CAT = "SM"
+RELAY_MIXED_CAT = "MX"
 
 # Shots per discipline (5 shots per stage)
 # Sprint: 2 stages, others: 4 stages
