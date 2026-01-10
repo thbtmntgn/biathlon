@@ -6,8 +6,15 @@ import argparse
 import datetime
 import sys
 
-from ..api import BiathlonError, get_analytic_results, get_race_results
-from ..constants import RELAY_DISCIPLINE, SHOOTING_STAGES, SKI_LAPS
+from ..api import (
+    BiathlonError,
+    get_analytic_results,
+    get_cup_results,
+    get_cups,
+    get_current_season_id,
+    get_race_results,
+)
+from ..constants import RELAY_DISCIPLINE, SHOOTING_STAGES, SINGLE_MIXED_RELAY_DISCIPLINE, SKI_LAPS
 from ..formatting import Color, is_pretty_output, rank_style, render_table
 from ..utils import (
     base_time_seconds,
@@ -21,6 +28,39 @@ from ..utils import (
     parse_time_seconds,
     sort_rows,
 )
+
+
+def _get_top_n_ibu_ids(cat_id: str, n: int, season_id: str = "") -> set[str]:
+    """Return IBUIds of top N athletes in World Cup total standings.
+
+    Args:
+        cat_id: Category ID (SM for men, SW for women)
+        n: Number of top athletes to include
+        season_id: Optional season ID (defaults to current season)
+    """
+    if not season_id:
+        season_id = get_current_season_id()
+
+    # Find total standings cup (DisciplineId="TS", Level=1)
+    cup_id = None
+    for cup in get_cups(season_id):
+        if cup.get("CatId") == cat_id and cup.get("DisciplineId") == "TS" and cup.get("Level") == 1:
+            cup_id = cup.get("CupId")
+            break
+
+    if not cup_id:
+        return set()
+
+    # Get standings and return top N IBUIds
+    try:
+        payload = get_cup_results(cup_id)
+    except BiathlonError:
+        return set()
+
+    rows = payload.get("Rows") or payload.get("Results") or []
+    # Sort by rank to ensure proper ordering
+    rows.sort(key=lambda r: int(r.get("Rank") or r.get("Score") or 9999) if str(r.get("Rank", "")).isdigit() else 9999)
+    return {r.get("IBUId") for r in rows[:n] if r.get("IBUId")}
 
 
 def _has_completed_results(payload: dict) -> bool:
@@ -95,6 +135,9 @@ def _find_latest_race_with_results(discipline_filter: str | None = None):
     for start_key, race_id, discipline in races:
         if discipline_filter and discipline != discipline_filter:
             continue
+        # Skip relay races (use 'biathlon relay' command instead)
+        if discipline in (RELAY_DISCIPLINE, SINGLE_MIXED_RELAY_DISCIPLINE):
+            continue
         try:
             payload = get_race_results(race_id)
         except BiathlonError:
@@ -149,7 +192,28 @@ def _format_race_error_label(payload: dict, race_id: str) -> str:
 def handle_results(args: argparse.Namespace) -> int:
     """List results for a race (default: most recent race)."""
     race_id, payload = _resolve_race(args)
+
+    # Exclude relay races (use 'biathlon relay' command instead)
+    discipline = _get_discipline(payload)
+    if discipline in (RELAY_DISCIPLINE, SINGLE_MIXED_RELAY_DISCIPLINE):
+        print("relay races are not supported by this command (use 'biathlon relay' instead)", file=sys.stderr)
+        return 1
+
     results = extract_results(payload)
+
+    # Apply --top filter (top N in World Cup standings)
+    top_n = getattr(args, "top", 0)
+    if top_n > 0:
+        cat_id = (payload.get("Competition") or {}).get("catId", "").upper()
+        if cat_id in ("SM", "SW"):
+            top_ibu_ids = _get_top_n_ibu_ids(cat_id, top_n)
+            if top_ibu_ids:
+                results = [r for r in results if r.get("IBUId") in top_ibu_ids]
+
+    # Apply --first filter (first N finishers by race position)
+    first_n = getattr(args, "first", 0)
+    if first_n > 0:
+        results = results[:first_n]
 
     if not results:
         label = _format_race_error_label(payload, race_id)
@@ -175,6 +239,10 @@ def handle_results(args: argparse.Namespace) -> int:
     collect_times("RNGT", "range", analytic_times)
     collect_times("STTM", "shooting", analytic_times)
 
+    # Check if this is a pursuit race
+    discipline = _get_discipline(payload)
+    is_pursuit = discipline == "PU"
+
     rows = []
     for result in results:
         identifier = result.get("IBUId") or result.get("Bib") or result.get("Name")
@@ -183,6 +251,8 @@ def handle_results(args: argparse.Namespace) -> int:
             "rank": result.get("Rank") or result.get("ResultOrder") or "",
             "name": result.get("Name") or result.get("ShortName") or "",
             "nat": result.get("Nat") or "",
+            "start_position": result.get("StartOrder") or "-" if is_pursuit else None,
+            "start_delay": result.get("StartInfo") or "-" if is_pursuit else None,
             "result": normalize_result_time(result, base_secs),
             "course": times.get("course") or get_first_time(result, ["TotalCourseTime", "CourseTime", "RunTime"]) or "-",
             "range": times.get("range") or get_first_time(result, ["TotalRangeTime", "RangeTime"]) or "-",
@@ -222,18 +292,33 @@ def handle_results(args: argparse.Namespace) -> int:
     if country_filter:
         rows = [r for r in rows if r.get("nat", "").upper() == country_filter]
 
-    # Apply --first limit
-    first_n = getattr(args, "first", 0)
-    if first_n > 0:
-        rows = rows[:first_n]
+    # Apply --limit
+    limit_n = getattr(args, "limit", 25)
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
     print(format_race_header(payload, race_id))
     show_sort_rank = bool(args.sort)
+    sort_col_map = {"result": "Result", "ski": "Ski", "range": "Range", "shooting": "Shooting", "misses": "Misses"}
     if show_sort_rank:
-        headers = ["Rank", "Position"]
+        sort_col = args.sort.lower()
+        sort_header = sort_col_map.get(sort_col, sort_col.capitalize())
+        headers = [f"{sort_header}Rank", "Rank"]
     else:
-        headers = ["Position"]
-    headers.extend(["Name", "Country", "Total", "Ski", "Range", "Shooting", "Misses"])
+        headers = ["Rank"]
+    headers.extend(["Name", "Country"])
+    if is_pursuit:
+        headers.extend(["StartRank", "StartDelay"])
+    headers.extend(["Result", "Ski", "Range", "Shooting", "Misses"])
+
+    # Find index of sorted column header for highlighting
+    highlight_headers = None
+    if args.sort:
+        sort_col = args.sort.lower()
+        sort_header = sort_col_map.get(sort_col)
+        if sort_header and sort_header in headers:
+            highlight_headers = [headers.index(sort_header)]
+
     render_rows = []
     for idx, row in enumerate(rows, start=1):
         render_row = []
@@ -241,9 +326,10 @@ def handle_results(args: argparse.Namespace) -> int:
             render_row.extend([idx, row["rank"]])
         else:
             render_row.append(row["rank"])
+        render_row.extend([row["name"], row["nat"]])
+        if is_pursuit:
+            render_row.extend([row["start_position"], row["start_delay"]])
         render_row.extend([
-            row["name"],
-            row["nat"],
             row["result"],
             row["course"],
             row["range"],
@@ -252,7 +338,7 @@ def handle_results(args: argparse.Namespace) -> int:
         ])
         render_rows.append(render_row)
     row_styles = [rank_style(row["rank"]) for row in rows]
-    render_table(headers, render_rows, pretty=is_pretty_output(args), row_styles=row_styles)
+    render_table(headers, render_rows, pretty=is_pretty_output(args), row_styles=row_styles, highlight_headers=highlight_headers)
     return 0
 
 
@@ -270,6 +356,21 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
         return 1
 
     results = extract_results(payload)
+
+    # Apply --top filter (top N in World Cup standings)
+    top_n = getattr(args, "top", 0)
+    if top_n > 0:
+        cat_id = (payload.get("Competition") or {}).get("catId", "").upper()
+        if cat_id in ("SM", "SW"):
+            top_ibu_ids = _get_top_n_ibu_ids(cat_id, top_n)
+            if top_ibu_ids:
+                results = [r for r in results if r.get("IBUId") in top_ibu_ids]
+
+    # Apply --first filter (first N finishers by race position)
+    first_n = getattr(args, "first", 0)
+    if first_n > 0:
+        results = results[:first_n]
+
     if not results:
         label = _format_race_error_label(payload, race_id)
         print(f"no results found for race {label}", file=sys.stderr)
@@ -320,30 +421,48 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
     if country_filter:
         rows = [r for r in rows if r.get("nat", "").upper() == country_filter]
 
-    # Apply --first limit
-    first_n = getattr(args, "first", 0)
-    if first_n > 0:
-        rows = rows[:first_n]
+    # Apply --limit
+    limit_n = getattr(args, "limit", 25)
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
     print(format_race_header(payload, race_id))
-    headers = ["Rank", "Name", "Country", "Gain", "StartPosition", "FinishPosition"]
+    headers = ["Rank", "Name", "Country", "Gain", "StartRank", "FinishRank"]
     pretty = is_pretty_output(args)
 
     # Find max gain for scaling colors
     max_gain = max((abs(r["diff"]) for r in rows if r["diff"] is not None), default=1)
 
     render_rows = []
-    row_styles = []
     for rank, row in enumerate(rows, start=1):
         diff = row["diff"]
         status = row.get("status", "")
         if diff is None:
             gain_val = status or "-"
-            row_styles.append("dim")
         else:
             gain_val = f"+{diff}" if diff > 0 else str(diff)
-            row_styles.append("")
         render_rows.append([rank, row["name"], row["nat"], gain_val, row["start"], row["finish"]])
+
+    def rank_color_formatter(cell_str: str, row_idx: int) -> str:
+        """Apply ranking colors based on finish position."""
+        if not Color.enabled():
+            return cell_str
+        row = rows[row_idx]
+        if row["diff"] is None:  # DNF/DNS
+            return Color.dim(cell_str)
+        finish = row["finish"]
+        style = rank_style(finish)
+        if style == "gold":
+            return Color.gold(cell_str)
+        elif style == "silver":
+            return Color.silver(cell_str)
+        elif style == "bronze":
+            return Color.bronze(cell_str)
+        elif style == "flowers":
+            return Color.flowers(cell_str)
+        elif style == "other":
+            return Color.other(cell_str)
+        return cell_str
 
     def gain_formatter(cell_str: str, row_idx: int) -> str:
         if not Color.enabled():
@@ -351,7 +470,7 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
         row = rows[row_idx]
         diff = row["diff"]
         if diff is None:
-            return cell_str
+            return Color.dim(cell_str)
         intensity = abs(diff) / max_gain if max_gain > 0 else 0
         if diff > 0:
             return Color.green(cell_str, intensity)
@@ -359,8 +478,8 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
             return Color.red(cell_str, intensity)
         return cell_str
 
-    cell_formatters = [None, None, None, gain_formatter, None, None] if pretty else None
-    render_table(headers, render_rows, pretty=pretty, row_styles=row_styles, cell_formatters=cell_formatters)
+    cell_formatters = [rank_color_formatter, rank_color_formatter, rank_color_formatter, gain_formatter, gain_formatter, gain_formatter] if pretty else None
+    render_table(headers, render_rows, pretty=pretty, cell_formatters=cell_formatters)
     return 0
 
 
@@ -368,12 +487,28 @@ def handle_results_ski(args: argparse.Namespace) -> int:
     """Show ski/course time breakdown for a race."""
     race_id, payload = _resolve_race(args)
     results = extract_results(payload)
+
+    # Apply --top filter (top N in World Cup standings)
+    top_n = getattr(args, "top", 0)
+    if top_n > 0:
+        cat_id = (payload.get("Competition") or {}).get("catId", "").upper()
+        if cat_id in ("SM", "SW"):
+            top_ibu_ids = _get_top_n_ibu_ids(cat_id, top_n)
+            if top_ibu_ids:
+                results = [r for r in results if r.get("IBUId") in top_ibu_ids]
+
+    # Apply --first filter (first N finishers by race position)
+    first_n = getattr(args, "first", 0)
+    if first_n > 0:
+        results = results[:first_n]
+
     if not results:
         label = _format_race_error_label(payload, race_id)
         print(f"no results found for race {label}", file=sys.stderr)
         return 1
 
     discipline = _get_discipline(payload)
+    is_pursuit = discipline == "PU"
     if discipline == RELAY_DISCIPLINE:
         print(format_race_header(payload, race_id))
         print("(relay course breakdown not supported yet)")
@@ -405,6 +540,8 @@ def handle_results_ski(args: argparse.Namespace) -> int:
             "position": position,
             "name": res.get("Name") or res.get("ShortName") or "",
             "nat": res.get("Nat") or "",
+            "start_position": res.get("StartOrder") or "-" if is_pursuit else None,
+            "start_delay": res.get("StartInfo") or "-" if is_pursuit else None,
             "course": course_total,
             "ski_col": ski_total,
         }
@@ -439,10 +576,10 @@ def handle_results_ski(args: argparse.Namespace) -> int:
     if country_filter:
         rows = [r for r in rows if r.get("nat", "").upper() == country_filter]
 
-    # Apply --first limit
-    first_n = getattr(args, "first", 0)
-    if first_n > 0:
-        rows = rows[:first_n]
+    # Apply --limit
+    limit_n = getattr(args, "limit", 25)
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
     # Build headers and render rows
     sort_col_map = {"course": "Ski", "ski": "SkiTime", "result": "Result"}
@@ -450,6 +587,8 @@ def handle_results_ski(args: argparse.Namespace) -> int:
     rank_col_name = f"{sort_header}Rank"
 
     headers = [rank_col_name, "Position", "Name", "Country"]
+    if is_pursuit:
+        headers.extend(["StartPosition", "StartDelay"])
     if show_result:
         headers.append("Result")
     if include_ski_col:
@@ -465,6 +604,8 @@ def handle_results_ski(args: argparse.Namespace) -> int:
     render_rows = []
     for row in rows:
         render_row = [row["ski_rank"], row["position"], row["name"], row["nat"]]
+        if is_pursuit:
+            render_row.extend([row["start_position"], row["start_delay"]])
         if show_result:
             render_row.append(row["result"])
         if include_ski_col:
@@ -489,6 +630,21 @@ def handle_results_range(args: argparse.Namespace) -> int:
     """Show range time breakdown for a race."""
     race_id, payload = _resolve_race(args)
     results = extract_results(payload)
+
+    # Apply --top filter (top N in World Cup standings)
+    top_n = getattr(args, "top", 0)
+    if top_n > 0:
+        cat_id = (payload.get("Competition") or {}).get("catId", "").upper()
+        if cat_id in ("SM", "SW"):
+            top_ibu_ids = _get_top_n_ibu_ids(cat_id, top_n)
+            if top_ibu_ids:
+                results = [r for r in results if r.get("IBUId") in top_ibu_ids]
+
+    # Apply --first filter (first N finishers by race position)
+    first_n = getattr(args, "first", 0)
+    if first_n > 0:
+        results = results[:first_n]
+
     if not results:
         label = _format_race_error_label(payload, race_id)
         print(f"no results found for race {label}", file=sys.stderr)
@@ -542,10 +698,10 @@ def handle_results_range(args: argparse.Namespace) -> int:
     if country_filter:
         rows = [r for r in rows if r.get("nat", "").upper() == country_filter]
 
-    # Apply --first limit
-    first_n = getattr(args, "first", 0)
-    if first_n > 0:
-        rows = rows[:first_n]
+    # Apply --limit
+    limit_n = getattr(args, "limit", 25)
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
     # Build headers
     sort_col_map = {"range": "Range"}
@@ -583,6 +739,21 @@ def handle_results_shooting(args: argparse.Namespace) -> int:
     """Show shooting time breakdown for a race."""
     race_id, payload = _resolve_race(args)
     results = extract_results(payload)
+
+    # Apply --top filter (top N in World Cup standings)
+    top_n = getattr(args, "top", 0)
+    if top_n > 0:
+        cat_id = (payload.get("Competition") or {}).get("catId", "").upper()
+        if cat_id in ("SM", "SW"):
+            top_ibu_ids = _get_top_n_ibu_ids(cat_id, top_n)
+            if top_ibu_ids:
+                results = [r for r in results if r.get("IBUId") in top_ibu_ids]
+
+    # Apply --first filter (first N finishers by race position)
+    first_n = getattr(args, "first", 0)
+    if first_n > 0:
+        results = results[:first_n]
+
     if not results:
         label = _format_race_error_label(payload, race_id)
         print(f"no results found for race {label}", file=sys.stderr)
@@ -670,10 +841,10 @@ def handle_results_shooting(args: argparse.Namespace) -> int:
     if country_filter:
         rows = [r for r in rows if r.get("nat", "").upper() == country_filter]
 
-    # Apply --first limit
-    first_n = getattr(args, "first", 0)
-    if first_n > 0:
-        rows = rows[:first_n]
+    # Apply --limit
+    limit_n = getattr(args, "limit", 25)
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
     # Build headers
     sort_col_map = {"shooting": "Shooting", "misses": "Misses"}

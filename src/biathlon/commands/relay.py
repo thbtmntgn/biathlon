@@ -156,6 +156,11 @@ def handle_relay(args: argparse.Namespace) -> int:
 
     team_results.sort(key=team_sort_key)
 
+    # Apply --first filter (first N teams by race position)
+    first_n = getattr(args, "first", 0)
+    if first_n > 0:
+        team_results = team_results[:first_n]
+
     # Group leg results by team (using Bib as team identifier)
     legs_by_bib: dict[str, list[dict]] = {}
     for leg in leg_results:
@@ -272,10 +277,10 @@ def handle_relay(args: argparse.Namespace) -> int:
             row["sort_rank"] = idx
         show_sort_rank = True
 
-    # Apply --first limit
-    first_n = getattr(args, "first", 0)
-    if first_n > 0:
-        rows = rows[:first_n]
+    # Apply --limit
+    limit_n = getattr(args, "limit", 25)
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
     # Build headers and render
     print(format_race_header(payload, race_id))

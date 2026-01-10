@@ -38,9 +38,9 @@ def handle_seasons(args: argparse.Namespace) -> int:
     )
 
     # Apply display limit
-    first_n = getattr(args, "first", 25) or 0
-    if first_n > 0:
-        sorted_seasons = sorted_seasons[:first_n]
+    limit_n = getattr(args, "limit", 25) or 0
+    if limit_n > 0:
+        sorted_seasons = sorted_seasons[:limit_n]
 
     pretty = is_pretty_output(args)
     rows: list[list[str]] = []

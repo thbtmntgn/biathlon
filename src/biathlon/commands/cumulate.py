@@ -282,15 +282,15 @@ def handle_cumulate_time_generic(args: argparse.Namespace, label: str, accumulat
 
     if position_mode:
         rows.sort(key=lambda row: (row["avg_pos"], -row["races"], row["name"]))
-        headers = ["Position", "Name", "Country", "Races", "AvgPosition"]
+        headers = ["Rank", "Name", "Country", "Races", "AvgPosition"]
     else:
         rows.sort(key=lambda row: row.get("time", 0))
-        headers = ["Position", "Name", "Country", "Races", "TotalTime"]
+        headers = ["Rank", "Name", "Country", "Races", "TotalTime"]
 
     # Apply display limit
-    first_n = getattr(args, "first", 25) or 0
-    if first_n > 0:
-        rows = rows[:first_n]
+    limit_n = getattr(args, "limit", 25) or 0
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
     if position_mode:
         render_rows = [
@@ -331,11 +331,11 @@ def handle_cumulate_miss(args: argparse.Namespace) -> int:
     rows.sort(key=lambda row: (row["misses"], row.get("time", 0)))
 
     # Apply display limit
-    first_n = getattr(args, "first", 25) or 0
-    if first_n > 0:
-        rows = rows[:first_n]
+    limit_n = getattr(args, "limit", 25) or 0
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
-    headers = ["Position", "Name", "Country", "Races", "Misses"]
+    headers = ["Rank", "Name", "Country", "Races", "Misses"]
     render_rows = [
         [idx + 1, row["name"], row["nat"], row["races"], row["misses"]]
         for idx, row in enumerate(rows)
@@ -383,7 +383,7 @@ def handle_cumulate_shooting(args: argparse.Namespace) -> int:
             display_rows = base_sorted
         if first_n > 0:
             display_rows = display_rows[:first_n]
-        headers = ["Position", "Name", "Country", "Races", "AvgPosition", "Accuracy"]
+        headers = ["Rank", "Name", "Country", "Races", "AvgPosition", "Accuracy"]
         render_rows = [
             [row.get("rank_saved", idx), row["name"], row["nat"], row["races"],
              f"{row['avg_pos']:.2f}", "-" if acc_value(row) is None else f"{acc_value(row) * 100:.1f}%"]
@@ -400,7 +400,7 @@ def handle_cumulate_shooting(args: argparse.Namespace) -> int:
         display_rows = sorted(rows, key=lambda row: (row.get("misses", 0), row.get("time", 0), row["rank_saved"])) if sort_key == "misses" else base_sorted
         if first_n > 0:
             display_rows = display_rows[:first_n]
-        headers = ["Position", "Name", "Country", "Races", "ShootingTime", "Misses"]
+        headers = ["Rank", "Name", "Country", "Races", "ShootingTime", "Misses"]
         render_rows = [
             [row["rank_saved"], row["name"], row["nat"], row["races"], format_seconds(row.get("time", 0)), row.get("misses", 0)]
             for row in display_rows
@@ -518,11 +518,11 @@ def handle_cumulate_remontada(args: argparse.Namespace) -> int:
     rows.sort(key=lambda r: (-r["gain"], -r["races"], r["name"]))
 
     # Apply display limit
-    first_n = getattr(args, "first", 25) or 0
-    if first_n > 0:
-        rows = rows[:first_n]
+    limit_n = getattr(args, "limit", 25) or 0
+    if limit_n > 0:
+        rows = rows[:limit_n]
 
-    headers = ["Position", "Name", "Country", "Races", "Gain", "WCRank"]
+    headers = ["Rank", "Name", "Country", "Races", "Gain", "WCRank"]
     render_rows = [
         [idx + 1, row["name"], row["nat"], row["races"],
          f"+{row['gain']}" if row["gain"] > 0 else str(row["gain"]),

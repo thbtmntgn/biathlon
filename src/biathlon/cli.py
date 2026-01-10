@@ -257,7 +257,7 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=CompactOptionalFormatter,
         add_help=False,
     )
-    seasons_parser.add_argument("--first", "-n", type=int, default=25, help="Number of seasons to display (default: 25, 0 for all)")
+    seasons_parser.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(seasons_parser)
     seasons_parser.set_defaults(func=handle_seasons)
 
@@ -287,7 +287,9 @@ def build_parser() -> argparse.ArgumentParser:
     results_parser.add_argument("--race", "-r", default="", help="Race id (default: most recent completed World Cup race)")
     results_parser.add_argument("--sort", default="", help="Sort by column (result, ski, range, shooting, misses)")
     results_parser.add_argument("--country", "-c", default="", help="Filter by country code (e.g., FRA, GER, NOR)")
-    results_parser.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    results_parser.add_argument("--top", type=int, default=0, help="Filter to top N athletes in World Cup standings")
+    results_parser.add_argument("--first", type=int, default=0, help="Filter to first N finishers in the race")
+    results_parser.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(results_parser)
     results_parser.set_defaults(func=handle_results, results_command=None)
     results_sub = results_parser.add_subparsers(dest="results_command", title="subcommands", metavar="")
@@ -295,7 +297,9 @@ def build_parser() -> argparse.ArgumentParser:
     results_remontada = results_sub.add_parser("remontada", help="Show pursuit gains", formatter_class=CompactOptionalFormatter, add_help=False)
     results_remontada.add_argument("--race", "-r", default="", help="Race id")
     results_remontada.add_argument("--country", "-c", default="", help="Filter by country code (e.g., FRA, GER, NOR)")
-    results_remontada.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    results_remontada.add_argument("--top", type=int, default=0, help="Filter to top N athletes in World Cup standings")
+    results_remontada.add_argument("--first", type=int, default=0, help="Filter to first N finishers in the race")
+    results_remontada.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(results_remontada)
     results_remontada.set_defaults(func=handle_results_remontada)
 
@@ -303,7 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
     results_ski.add_argument("--race", "-r", default="", help="Race id")
     results_ski.add_argument("--sort", default="", help="Sort by column")
     results_ski.add_argument("--country", "-c", default="", help="Filter by country code (e.g., FRA, GER, NOR)")
-    results_ski.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    results_ski.add_argument("--top", type=int, default=0, help="Filter to top N athletes in World Cup standings")
+    results_ski.add_argument("--first", type=int, default=0, help="Filter to first N finishers in the race")
+    results_ski.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(results_ski)
     results_ski.set_defaults(func=handle_results_ski)
 
@@ -311,7 +317,9 @@ def build_parser() -> argparse.ArgumentParser:
     results_range.add_argument("--race", "-r", default="", help="Race id")
     results_range.add_argument("--sort", default="", help="Sort by column")
     results_range.add_argument("--country", "-c", default="", help="Filter by country code (e.g., FRA, GER, NOR)")
-    results_range.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    results_range.add_argument("--top", type=int, default=0, help="Filter to top N athletes in World Cup standings")
+    results_range.add_argument("--first", type=int, default=0, help="Filter to first N finishers in the race")
+    results_range.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(results_range)
     results_range.set_defaults(func=handle_results_range)
 
@@ -319,7 +327,9 @@ def build_parser() -> argparse.ArgumentParser:
     results_shooting.add_argument("--race", "-r", default="", help="Race id")
     results_shooting.add_argument("--sort", default="", help="Sort by column")
     results_shooting.add_argument("--country", "-c", default="", help="Filter by country code (e.g., FRA, GER, NOR)")
-    results_shooting.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    results_shooting.add_argument("--top", type=int, default=0, help="Filter to top N athletes in World Cup standings")
+    results_shooting.add_argument("--first", type=int, default=0, help="Filter to first N finishers in the race")
+    results_shooting.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(results_shooting)
     results_shooting.set_defaults(func=handle_results_shooting)
 
@@ -355,7 +365,7 @@ def build_parser() -> argparse.ArgumentParser:
     cumulate_remontada.add_argument("--men", action="store_true", help="Show men")
     cumulate_remontada.add_argument("--min-race", type=int, default=0, help="Minimum races")
     cumulate_remontada.add_argument("--top", type=int, default=0, help="Filter to top N WC athletes")
-    cumulate_remontada.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    cumulate_remontada.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(cumulate_remontada)
     cumulate_remontada.set_defaults(func=handle_cumulate_remontada)
 
@@ -381,7 +391,7 @@ def build_parser() -> argparse.ArgumentParser:
     scores_parser.add_argument("--men", action="store_true", help="Show men")
     scores_parser.add_argument("--level", "-l", default="1", help="Cup level")
     scores_parser.add_argument("--sort", default="total", choices=["total", "sprint", "pursuit", "individual", "massstart"], help="Sort by column")
-    scores_parser.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    scores_parser.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(scores_parser)
     scores_parser.set_defaults(func=handle_scores)
 
@@ -431,7 +441,7 @@ def build_parser() -> argparse.ArgumentParser:
     shooting_parser.add_argument("--sort", default="accuracy", help="Sort order")
     shooting_parser.add_argument("--min-race", type=int, default=0, help="Minimum races")
     shooting_parser.add_argument("--top", type=int, default=0, help="Restrict to top N athletes in WC standings")
-    shooting_parser.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    shooting_parser.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     shooting_parser.add_argument("--debug-races", action="store_true", help="Debug: print races considered")
     add_output_flag(shooting_parser)
     shooting_parser.set_defaults(func=handle_shooting)
@@ -443,7 +453,8 @@ def build_parser() -> argparse.ArgumentParser:
     relay_parser.add_argument("--mixed", action="store_true", help="Show mixed relay")
     relay_parser.add_argument("--singlemixed", action="store_true", help="Show single mixed relay")
     relay_parser.add_argument("--sort", default="", help="Sort by column (e.g., L1Time, L2Rank, misses)")
-    relay_parser.add_argument("--first", "-n", type=int, default=25, help="Number of rows to display (default: 25, 0 for all)")
+    relay_parser.add_argument("--first", type=int, default=0, help="Filter to first N teams in the race")
+    relay_parser.add_argument("--limit", "-n", type=int, default=25, help="Limit output rows (default: 25, 0 for all)")
     add_output_flag(relay_parser)
     relay_parser.set_defaults(func=handle_relay)
 

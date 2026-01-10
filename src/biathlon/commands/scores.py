@@ -178,9 +178,9 @@ def handle_scores(args: argparse.Namespace) -> int:
             athlete["disc_position"] = disc_pos
 
     # Apply display limit
-    first_n = getattr(args, "first", 25) or 0
-    if first_n > 0:
-        athlete_list = athlete_list[:first_n]
+    limit_n = getattr(args, "limit", 25) or 0
+    if limit_n > 0:
+        athlete_list = athlete_list[:limit_n]
 
     # Find leaders for coloring
     leaders = _find_leaders(athlete_list)

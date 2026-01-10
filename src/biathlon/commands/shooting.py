@@ -268,10 +268,10 @@ def handle_shooting(args: argparse.Namespace) -> int:
         position += 1
 
     # Apply display limit
-    first_n = getattr(args, "first", 25) or 0
-    if first_n > 0:
-        render_rows = render_rows[:first_n]
-        accuracy_values = accuracy_values[:first_n]
+    limit_n = getattr(args, "limit", 25) or 0
+    if limit_n > 0:
+        render_rows = render_rows[:limit_n]
+        accuracy_values = accuracy_values[:limit_n]
 
     pretty = is_pretty_output(args)
 
