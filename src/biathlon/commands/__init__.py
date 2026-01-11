@@ -15,6 +15,7 @@ from .cumulate import (
     handle_cumulate_shooting,
     handle_cumulate_range,
     handle_cumulate_ski,
+    handle_cumulate_penalty,
     handle_cumulate_remontada,
 )
 from .scores import handle_scores
@@ -37,6 +38,7 @@ __all__ = [
     "handle_cumulate_shooting",
     "handle_cumulate_range",
     "handle_cumulate_ski",
+    "handle_cumulate_penalty",
     "handle_cumulate_remontada",
     "handle_scores",
     "handle_record_lap",

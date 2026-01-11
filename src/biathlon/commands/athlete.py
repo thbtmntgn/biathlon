@@ -26,7 +26,9 @@ def handle_athlete_results(args: argparse.Namespace) -> int:
 
     season_id = args.season or get_current_season_id()
     event_map: dict[str, dict] = {}
-    for lvl in (1, 2, 3, 4, 5):
+    level_arg = getattr(args, "level", 0)
+    levels = [level_arg] if level_arg in {1, 2, 3, 4, 5} else [1, 2, 3, 4, 5]
+    for lvl in levels:
         for ev in get_events(season_id, level=lvl):
             key = ev.get("EventId") or f"{lvl}-{ev.get('Description','')}"
             event_map.setdefault(key, ev)
@@ -142,28 +144,30 @@ def handle_athlete_info(args: argparse.Namespace) -> int:
         return 1
 
     season_id = args.season or get_current_season_id()
+    level_arg = getattr(args, "level", 0)
+    levels = [level_arg] if level_arg in {1, 2, 3, 4, 5} else [1, 2, 3, 4, 5]
 
     def find_by_search(term: str) -> dict[str, dict]:
         matches: dict[str, dict] = {}
-        events = get_events(season_id, level=1)
-        for event in events:
-            event_id = event.get("EventId")
-            if not event_id:
-                continue
-            for race in get_races(event_id):
-                race_id = race.get("RaceId") or race.get("Id")
-                if not race_id:
+        for lvl in levels:
+            for event in get_events(season_id, level=lvl):
+                event_id = event.get("EventId")
+                if not event_id:
                     continue
-                try:
-                    payload = get_race_results(race_id)
-                except BiathlonError:
-                    continue
-                for res in extract_results(payload):
-                    name = res.get("Name") or res.get("ShortName") or ""
-                    if term.lower() in name.lower():
-                        ident = res.get("IBUId")
-                        if ident:
-                            matches.setdefault(ident, {"name": name, "nat": res.get("Nat") or ""})
+                for race in get_races(event_id):
+                    race_id = race.get("RaceId") or race.get("Id")
+                    if not race_id:
+                        continue
+                    try:
+                        payload = get_race_results(race_id)
+                    except BiathlonError:
+                        continue
+                    for res in extract_results(payload):
+                        name = res.get("Name") or res.get("ShortName") or ""
+                        if term.lower() in name.lower():
+                            ident = res.get("IBUId")
+                            if ident:
+                                matches.setdefault(ident, {"name": name, "nat": res.get("Nat") or ""})
         return matches
 
     requested: dict[str, dict] = {}

@@ -37,6 +37,80 @@ def selected_disciplines(type_arg: str) -> set[str]:
     return {discipline}
 
 
+def pursuit_course_seconds(result: dict, base_seconds: float | None) -> float | None:
+    """Return pursuit course time (result time minus start delay) in seconds."""
+    result_time = get_first_time(result, ["Result", "TotalTime"])
+    start_delay = result.get("StartInfo")
+    if not result_time or not start_delay:
+        return None
+    delay_secs = parse_time_seconds(str(start_delay))
+    if delay_secs is None:
+        return None
+    if str(result_time).upper() == "DNS":
+        return None
+    if str(result_time).startswith("+"):
+        if base_seconds is None:
+            return None
+        diff_secs = parse_time_seconds(str(result_time))
+        if diff_secs is None:
+            return None
+        secs = base_seconds + diff_secs - delay_secs
+    else:
+        abs_secs = parse_time_seconds(str(result_time))
+        if abs_secs is None:
+            return None
+        secs = abs_secs - delay_secs
+    if secs < 0:
+        return None
+    return secs
+
+
+def penalty_seconds(
+    result: dict,
+    discipline: str,
+    base_seconds: float | None,
+    ski_value: str | None,
+    range_value: str | None,
+    course_value: str | None,
+    result_value: str | None,
+    start_delay: str | None,
+) -> float | None:
+    """Return penalty time in seconds following discipline rules."""
+    if discipline == "IN":
+        misses = parse_misses(result.get("ShootingTotal"))
+        if misses is None:
+            return None
+        return float(misses * 60)
+    if discipline == "PU":
+        finish_secs = result_seconds(result, base_seconds)
+        if finish_secs is None and result_value and not str(result_value).startswith("+"):
+            finish_secs = parse_time_seconds(result_value)
+        if finish_secs is not None and start_delay:
+            delay_secs = parse_time_seconds(start_delay)
+            if delay_secs is not None:
+                base_secs = finish_secs - delay_secs
+            else:
+                base_secs = None
+        else:
+            base_secs = None
+    else:
+        base_secs = result_seconds(result, base_seconds)
+        if base_secs is None and result_value and not str(result_value).startswith("+"):
+            base_secs = parse_time_seconds(result_value)
+    if base_secs is None and course_value:
+        base_secs = parse_time_seconds(course_value)
+    if base_secs is None:
+        return None
+    ski_secs = parse_time_seconds(ski_value) if ski_value else None
+    range_secs = parse_time_seconds(range_value) if range_value else None
+    if ski_secs is None or range_secs is None:
+        return None
+    penalty_secs = base_secs - ski_secs - range_secs
+    if penalty_secs < 0:
+        return None
+    return penalty_secs
+
+
 def cumulate_across_races(
     args: argparse.Namespace,
     accumulator: str,
@@ -46,7 +120,7 @@ def cumulate_across_races(
     gender = "men" if args.men else "women"
     resolved_type = "all" if args.event else (args.discipline or "sprint")
     disciplines = selected_disciplines(resolved_type)
-    position_mode = accumulator in {"ski", "time", "range", "shooting"} and getattr(args, "position", False)
+    position_mode = accumulator in {"ski", "time", "range", "shooting", "penalty"} and getattr(args, "position", False)
     min_races_required = getattr(args, "min_race", 0) if position_mode else 0
     cat_id = GENDER_TO_CAT.get(gender.lower())
     debug_races = getattr(args, "debug_races", False)
@@ -98,6 +172,7 @@ def cumulate_across_races(
             shooting_lookup: dict[str, str] = {}
             range_lookup: dict[str, str] = {}
             ski_lookup: dict[str, str] = {}
+            course_lookup: dict[str, str] = {}
             race_times: dict[str, float] = {}
 
             if accumulator in {"shooting", "range", "ski"}:
@@ -124,6 +199,19 @@ def cumulate_across_races(
                             range_lookup[ident] = val
                         else:
                             ski_lookup.setdefault(ident, val)
+            if accumulator == "penalty":
+                for tid, target in (("SKIT", ski_lookup), ("RNGT", range_lookup), ("CRST", course_lookup)):
+                    try:
+                        analytic = get_analytic_results(race_id, tid)
+                    except BiathlonError:
+                        continue
+                    for row in analytic.get("Results") or []:
+                        if row.get("IsTeam"):
+                            continue
+                        ident = row.get("IBUId") or row.get("Bib") or row.get("Name")
+                        if not ident:
+                            continue
+                        target[ident] = get_first_time(row, ["TotalTime", "Result"])
 
             for res in results:
                 ibuid = res.get("IBUId") or res.get("Bib") or res.get("Name")
@@ -137,9 +225,46 @@ def cumulate_across_races(
                 })
 
                 if accumulator == "time":
-                    secs = result_seconds(res, base_secs)
+                    use_pursuit = getattr(args, "no_sprint_delay", False) and disc == "PU"
+                    secs = pursuit_course_seconds(res, base_secs) if use_pursuit else result_seconds(res, base_secs)
                     if secs is None:
                         continue
+                    entry["time"] += secs
+                    entry["races"] += 1
+                    race_used = True
+                    if position_mode:
+                        race_times[ibuid] = secs
+                elif accumulator == "penalty":
+                    ski_val = ski_lookup.get(ibuid)
+                    if not ski_val:
+                        ski_val = get_first_time(res, [
+                            "TotalSkiTime", "SkiTime", "SkiTimeTotal", "SKITime", "Ski",
+                        ])
+                    range_val = range_lookup.get(ibuid)
+                    if not range_val:
+                        range_val = get_first_time(res, ["TotalRangeTime", "RangeTime"])
+                    course_val = course_lookup.get(ibuid)
+                    if not course_val:
+                        course_val = get_first_time(res, ["TotalCourseTime", "CourseTime", "RunTime"])
+                    if not ski_val:
+                        ski_val = course_val
+                    result_val = get_first_time(res, ["Result", "TotalTime"])
+                    start_delay = res.get("StartInfo") if disc == "PU" else None
+                    secs = penalty_seconds(
+                        res,
+                        disc,
+                        base_secs,
+                        ski_val,
+                        range_val,
+                        course_val,
+                        result_val,
+                        start_delay,
+                    )
+                    if secs is None:
+                        if position_mode:
+                            secs = float("inf")
+                        else:
+                            continue
                     entry["time"] += secs
                     entry["races"] += 1
                     race_used = True
@@ -258,7 +383,7 @@ def cumulate_across_races(
             rows.append(entry)
     else:
         for entry in totals.values():
-            if entry["races"] != total_races:
+            if accumulator != "penalty" and entry["races"] != total_races:
                 continue
             rows.append(entry)
 
@@ -281,10 +406,10 @@ def handle_cumulate_time_generic(args: argparse.Namespace, label: str, accumulat
         return 1
 
     if position_mode:
-        rows.sort(key=lambda row: (row["avg_pos"], -row["races"], row["name"]))
+        rows.sort(key=lambda row: (row["avg_pos"], -row["races"], row["name"]), reverse=getattr(args, "reverse", False))
         headers = ["Rank", "Name", "Country", "Races", "AvgPosition"]
     else:
-        rows.sort(key=lambda row: row.get("time", 0))
+        rows.sort(key=lambda row: row.get("time", 0), reverse=getattr(args, "reverse", False))
         headers = ["Rank", "Name", "Country", "Races", "TotalTime"]
 
     # Apply display limit
@@ -424,6 +549,11 @@ def handle_cumulate_range(args: argparse.Namespace) -> int:
 def handle_cumulate_ski(args: argparse.Namespace) -> int:
     """Compute cumulative ski time ranking."""
     return handle_cumulate_time_generic(args, "ski time", "ski")
+
+
+def handle_cumulate_penalty(args: argparse.Namespace) -> int:
+    """Compute cumulative penalty time ranking."""
+    return handle_cumulate_time_generic(args, "penalty time", "penalty")
 
 
 def handle_cumulate_remontada(args: argparse.Namespace) -> int:

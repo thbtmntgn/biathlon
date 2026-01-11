@@ -15,7 +15,7 @@ from ..api import (
     get_race_results,
 )
 from ..constants import RELAY_DISCIPLINE, SHOOTING_STAGES, SINGLE_MIXED_RELAY_DISCIPLINE, SKI_LAPS
-from ..formatting import Color, is_pretty_output, rank_style, render_table
+from ..formatting import Color, format_seconds, is_pretty_output, rank_style, render_table
 from ..utils import (
     base_time_seconds,
     build_analytic_times,
@@ -53,6 +53,27 @@ def _calculate_pursuit_time(result_time: str, start_delay: str) -> str:
     if pursuit_secs < 0:
         return "-"
     return _format_time(pursuit_secs)
+
+
+def _calculate_penalty_time(
+    discipline: str,
+    base_time: str,
+    ski_time: str,
+    range_time: str,
+    misses: int,
+) -> str:
+    """Calculate penalty time per discipline rules."""
+    if discipline == "IN":
+        return format_seconds(misses * 60)
+    base_secs = parse_time_seconds(base_time)
+    ski_secs = parse_time_seconds(ski_time)
+    range_secs = parse_time_seconds(range_time)
+    if base_secs is None or ski_secs is None or range_secs is None:
+        return "-"
+    penalty_secs = base_secs - ski_secs - range_secs
+    if penalty_secs < 0:
+        return "-"
+    return format_seconds(penalty_secs)
 
 
 def _get_top_n_ibu_ids(cat_id: str, n: int, season_id: str = "") -> set[str]:
@@ -261,6 +282,7 @@ def handle_results(args: argparse.Namespace) -> int:
 
     analytic_times: dict = {}
     collect_times("CRST", "course", analytic_times)
+    collect_times("SKIT", "ski", analytic_times)
     collect_times("RNGT", "range", analytic_times)
     collect_times("STTM", "shooting", analytic_times)
 
@@ -274,6 +296,7 @@ def handle_results(args: argparse.Namespace) -> int:
         times = analytic_times.get(identifier, {})
         result_time = normalize_result_time(result, base_secs)
         start_delay = result.get("StartInfo") or "-" if is_pursuit else None
+        misses = parse_misses(result.get("ShootingTotal")) or 0
         row = {
             "rank": result.get("Rank") or result.get("ResultOrder") or "",
             "name": result.get("Name") or result.get("ShortName") or "",
@@ -283,11 +306,25 @@ def handle_results(args: argparse.Namespace) -> int:
             "pursuit_time": _calculate_pursuit_time(result_time, start_delay) if is_pursuit else None,
             "result": result_time,
             "course": times.get("course") or get_first_time(result, ["TotalCourseTime", "CourseTime", "RunTime"]) or "-",
+            "ski_time": times.get("ski") or get_first_time(result, [
+                "TotalSkiTime", "SkiTime", "SkiTimeTotal", "SKITime", "Ski",
+            ]) or "-",
             "range": times.get("range") or get_first_time(result, ["TotalRangeTime", "RangeTime"]) or "-",
+            "penalty": "-",
+            "ring_avg": "-",
             "shooting": times.get("shooting") or get_first_time(result, ["TotalShootingTime", "ShootingTime"]) or "-",
-            "misses": parse_misses(result.get("ShootingTotal")) or 0,
+            "misses": misses,
             "dns": is_dns(result),
         }
+        penalty_base = row["pursuit_time"] if is_pursuit else row["result"]
+        ski_time = row["ski_time"]
+        if ski_time in ("", "-", None):
+            ski_time = row["course"]
+        row["penalty"] = _calculate_penalty_time(discipline, penalty_base, ski_time, row["range"], misses)
+        if discipline != "IN" and misses > 0:
+            penalty_secs = parse_time_seconds(row["penalty"]) if row["penalty"] not in ("", None, "-") else None
+            if penalty_secs is not None:
+                row["ring_avg"] = format_seconds(penalty_secs / misses)
         rows.append(row)
 
     if args.sort:
@@ -296,8 +333,10 @@ def handle_results(args: argparse.Namespace) -> int:
             sort_col = "course"
         elif sort_col == "pursuit":
             sort_col = "pursuit_time"
-        if sort_col not in {"result", "course", "range", "shooting", "misses", "pursuit_time"}:
-            print("error: sort must be one of result, ski, range, shooting, misses, pursuit", file=sys.stderr)
+        elif sort_col == "penaltyloopavg":
+            sort_col = "ring_avg"
+        if sort_col not in {"result", "course", "range", "penalty", "ring_avg", "shooting", "misses", "pursuit_time"}:
+            print("error: sort must be one of result, ski, range, penalty, penaltyloopavg, shooting, misses, pursuit", file=sys.stderr)
             return 1
         if sort_col == "misses":
             def time_key(value: object) -> float:
@@ -329,7 +368,16 @@ def handle_results(args: argparse.Namespace) -> int:
 
     print(format_race_header(payload, race_id))
     show_sort_rank = bool(args.sort)
-    sort_col_map = {"result": "Result", "ski": "Ski", "range": "Range", "shooting": "Shooting", "misses": "Misses", "pursuit": "PursuitTime"}
+    sort_col_map = {
+        "result": "Result",
+        "ski": "Ski",
+        "range": "Range",
+        "penalty": "Penalty",
+        "penaltyloopavg": "PenaltyLoopAvg",
+        "shooting": "Shooting",
+        "misses": "Misses",
+        "pursuit": "PursuitTime",
+    }
     if show_sort_rank:
         sort_col = args.sort.lower()
         sort_header = sort_col_map.get(sort_col, sort_col.capitalize())
@@ -342,7 +390,9 @@ def handle_results(args: argparse.Namespace) -> int:
     headers.append("Result")
     if is_pursuit:
         headers.append("PursuitTime")
-    headers.extend(["Ski", "Range", "Shooting", "Misses"])
+    headers.extend(["Ski", "Range", "Shooting", "Misses", "Penalty"])
+    if discipline != "IN":
+        headers.append("PenaltyLoopAvg")
 
     # Find index of sorted column header for highlighting
     highlight_headers = None
@@ -370,7 +420,10 @@ def handle_results(args: argparse.Namespace) -> int:
             row["range"],
             row["shooting"],
             row["misses"],
+            row["penalty"],
         ])
+        if discipline != "IN":
+            render_row.append(row["ring_avg"])
         render_rows.append(render_row)
     row_styles = [rank_style(row["rank"]) for row in rows]
     render_table(headers, render_rows, pretty=is_pretty_output(args), row_styles=row_styles, highlight_headers=highlight_headers)

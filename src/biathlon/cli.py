@@ -24,6 +24,7 @@ from .commands import (
     handle_ceremony,
     handle_cumulate_course,
     handle_cumulate_miss,
+    handle_cumulate_penalty,
     handle_cumulate_range,
     handle_cumulate_remontada,
     handle_cumulate_shooting,
@@ -220,6 +221,11 @@ def add_cumulate_args(subparser: argparse.ArgumentParser) -> None:
         help="Rank by average position instead of cumulative time",
     )
     subparser.add_argument(
+        "--no-sprint-delay",
+        action="store_true",
+        help="For pursuit races, cumulate pursuit time without sprint start delay",
+    )
+    subparser.add_argument(
         "--min-race",
         type=int,
         default=0,
@@ -236,6 +242,11 @@ def add_cumulate_args(subparser: argparse.ArgumentParser) -> None:
         "--debug-races",
         action="store_true",
         help="Debug: print races considered",
+    )
+    subparser.add_argument(
+        "--reverse",
+        action="store_true",
+        help="Reverse sort order (highest first)",
     )
     add_output_flag(subparser)
 
@@ -285,7 +296,7 @@ def build_parser() -> argparse.ArgumentParser:
     # --- results ---
     results_parser = subparsers.add_parser("results", help="Show race results", formatter_class=CompactOptionalFormatter, add_help=False)
     results_parser.add_argument("--race", "-r", default="", help="Race id (default: most recent completed World Cup race)")
-    results_parser.add_argument("--sort", default="", help="Sort by column (result, ski, range, shooting, misses)")
+    results_parser.add_argument("--sort", default="", help="Sort by column (result, ski, range, penalty, penaltyloopavg, shooting, misses)")
     results_parser.add_argument("--country", "-c", default="", help="Filter by country code (e.g., FRA, GER, NOR)")
     results_parser.add_argument("--top", type=int, default=0, help="Filter to top N athletes in World Cup standings")
     results_parser.add_argument("--first", type=int, default=0, help="Filter to first N finishers in the race")
@@ -346,6 +357,15 @@ def build_parser() -> argparse.ArgumentParser:
     cumulate_ski = cumulate_sub.add_parser("ski", help="By ski time", formatter_class=CompactOptionalFormatter, add_help=False)
     add_cumulate_args(cumulate_ski)
     cumulate_ski.set_defaults(func=handle_cumulate_ski)
+
+    cumulate_penalty = cumulate_sub.add_parser("penalty", help="By penalty time", formatter_class=CompactOptionalFormatter, add_help=False)
+    add_cumulate_args(cumulate_penalty)
+    cumulate_penalty.set_defaults(discipline="all")
+    for action in cumulate_penalty._actions:
+        if action.dest == "discipline":
+            action.help = "Race discipline (default: all)"
+            break
+    cumulate_penalty.set_defaults(func=handle_cumulate_penalty)
 
     cumulate_range = cumulate_sub.add_parser("range", help="By range time", formatter_class=CompactOptionalFormatter, add_help=False)
     add_cumulate_args(cumulate_range)
@@ -420,6 +440,7 @@ def build_parser() -> argparse.ArgumentParser:
     athlete_results.add_argument("--id", "-i", default="", help="Athlete IBU id")
     athlete_results.add_argument("--search", "-s", default="", help="Search by name")
     athlete_results.add_argument("--season", default="", help="Season id")
+    athlete_results.add_argument("--level", type=int, default=0, help="Event level (1-5, 0 for all)")
     athlete_results.add_argument("--ski", action="store_true", help="Use ski time rank")
     add_output_flag(athlete_results)
     athlete_results.set_defaults(func=handle_athlete_results)
@@ -428,6 +449,7 @@ def build_parser() -> argparse.ArgumentParser:
     athlete_info.add_argument("--id", "-i", default="", help="Athlete IBU id (comma-separated)")
     athlete_info.add_argument("--search", "-s", default="", help="Search by name")
     athlete_info.add_argument("--season", default="", help="Season id")
+    athlete_info.add_argument("--level", type=int, default=0, help="Event level (1-5, 0 for all)")
     add_output_flag(athlete_info)
     athlete_info.set_defaults(func=handle_athlete_info)
 
