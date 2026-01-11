@@ -89,13 +89,35 @@ biathlon results shooting --race BT2526SWRLCP03SMMS
 Show World Cup total standings (women, current season by default):
 
 ```bash
-biathlon scores
+biathlon standings
 ```
 
 Show men sprint standings for season 2425:
 
 ```bash
-biathlon scores --season 2425 --men --sort sprint
+biathlon standings --season 2425 --men --sort sprint
+```
+
+Show relay results:
+
+```bash
+biathlon relay
+biathlon relay --men
+biathlon relay --mixed
+```
+
+Show biathlete information:
+
+```bash
+biathlon biathlete --search "boe johannes"
+biathlon biathlete results --id BTFRA12305199301
+```
+
+Show medal standings:
+
+```bash
+biathlon ceremony
+biathlon ceremony --athlete
 ```
 
 Run without installing:
@@ -123,10 +145,6 @@ For zsh, add to your `~/.zshrc`:
 ```zsh
 source <(biathlon --completion zsh)
 ```
-
-## Limitations
-
-- **Relay races are not supported.** Commands like `results`, `shooting`, and `cumulate` filter out relay events. Only individual race formats (sprint, pursuit, individual, mass start) are included in statistics and rankings.
 
 ## License
 
