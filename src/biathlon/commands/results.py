@@ -109,6 +109,32 @@ def _get_top_n_ibu_ids(cat_id: str, n: int, season_id: str = "") -> set[str]:
     return {r.get("IBUId") for r in rows[:n] if r.get("IBUId")}
 
 
+def _get_wc_rank_map(cat_id: str, n: int, season_id: str = "") -> dict[str, int]:
+    """Return a map of IBUId -> WC rank for top N in total standings."""
+    if not season_id:
+        season_id = get_current_season_id()
+
+    cup_id = None
+    for cup in get_cups(season_id):
+        if cup.get("CatId") == cat_id and cup.get("DisciplineId") == "TS" and cup.get("Level") == 1:
+            cup_id = cup.get("CupId")
+            break
+    if not cup_id:
+        return {}
+    try:
+        payload = get_cup_results(cup_id)
+    except BiathlonError:
+        return {}
+    rows = payload.get("Rows") or payload.get("Results") or []
+    rows.sort(key=lambda r: int(r.get("Rank") or r.get("Score") or 9999) if str(r.get("Rank", "")).isdigit() else 9999)
+    wc_map: dict[str, int] = {}
+    for idx, row in enumerate(rows[:n], start=1):
+        ibu_id = row.get("IBUId")
+        if ibu_id:
+            wc_map[ibu_id] = idx
+    return wc_map
+
+
 def _has_completed_results(payload: dict) -> bool:
     """Return True when a race payload contains completed, non-team results."""
     results = extract_results(payload)
@@ -291,6 +317,7 @@ def handle_results(args: argparse.Namespace) -> int:
     is_pursuit = discipline == "PU"
 
     rows = []
+    wc_rank_map: dict[str, int] = {}
     for result in results:
         identifier = result.get("IBUId") or result.get("Bib") or result.get("Name")
         times = analytic_times.get(identifier, {})
@@ -477,11 +504,12 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
         finish_rank = as_int(res.get("Rank") or res.get("ResultOrder"))
         name = res.get("Name") or res.get("ShortName") or ""
         nat = res.get("Nat") or ""
+        ibu_id = res.get("IBUId")
 
         if status and status not in {"OK", ""}:
             rows.append({
                 "diff": None, "start": start_rank, "finish": status or finish_rank,
-                "name": name, "nat": nat, "status": status,
+                "name": name, "nat": nat, "status": status, "ibu_id": ibu_id,
             })
             continue
 
@@ -490,7 +518,7 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
         diff = start_rank - finish_rank
         rows.append({
             "diff": diff, "start": start_rank, "finish": finish_rank,
-            "name": name, "nat": nat, "status": "",
+            "name": name, "nat": nat, "status": "", "ibu_id": ibu_id,
         })
 
     if not rows:
@@ -514,12 +542,21 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
     if limit_n > 0:
         rows = rows[:limit_n]
 
+    if getattr(args, "highlight_wc", False):
+        cat_id = (payload.get("Competition") or {}).get("catId", "").upper()
+        if cat_id in ("SM", "SW"):
+            wc_rank_map = _get_wc_rank_map(cat_id, 6)
+
     print(format_race_header(payload, race_id))
     headers = ["Rank", "Name", "Country", "Gain", "StartRank", "FinishRank"]
     pretty = is_pretty_output(args)
 
     # Find max gain for scaling colors
     max_gain = max((abs(r["diff"]) for r in rows if r["diff"] is not None), default=1)
+    rank_vals = [
+        val for r in rows for val in (r.get("start"), r.get("finish")) if isinstance(val, int)
+    ]
+    max_rank = min(60, max(rank_vals)) if rank_vals else 0
 
     render_rows = []
     for rank, row in enumerate(rows, start=1):
@@ -538,8 +575,12 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
         row = rows[row_idx]
         if row["diff"] is None:  # DNF/DNS
             return Color.dim(cell_str)
-        finish = row["finish"]
-        style = rank_style(finish)
+        if getattr(args, "highlight_wc", False) and wc_rank_map:
+            wc_rank = wc_rank_map.get(row.get("ibu_id"))
+            style = rank_style(wc_rank) if wc_rank else "other"
+        else:
+            finish = row["finish"]
+            style = rank_style(finish)
         if style == "gold":
             return Color.gold(cell_str)
         elif style == "silver":
@@ -566,7 +607,35 @@ def handle_results_remontada(args: argparse.Namespace) -> int:
             return Color.red(cell_str, intensity)
         return cell_str
 
-    cell_formatters = [rank_color_formatter, rank_color_formatter, rank_color_formatter, gain_formatter, gain_formatter, gain_formatter] if pretty else None
+    def rank_scale_formatter(cell_str: str, row_idx: int, key: str) -> str:
+        if not Color.enabled():
+            return cell_str
+        if max_rank <= 1:
+            return cell_str
+        row = rows[row_idx]
+        val = row.get(key)
+        if not isinstance(val, int):
+            return Color.dim(cell_str)
+        rank_val = min(val, max_rank)
+        pos = (rank_val - 1) / (max_rank - 1)
+        delta = 0.5 - pos
+        if delta == 0:
+            return cell_str
+        intensity = min(1.0, abs(delta) * 2)
+        return Color.green(cell_str, intensity) if delta > 0 else Color.red(cell_str, intensity)
+
+    cell_formatters = (
+        [
+            rank_color_formatter,
+            rank_color_formatter,
+            rank_color_formatter,
+            gain_formatter,
+            lambda s, i: rank_scale_formatter(s, i, "start"),
+            lambda s, i: rank_scale_formatter(s, i, "finish"),
+        ]
+        if pretty
+        else None
+    )
     render_table(headers, render_rows, pretty=pretty, cell_formatters=cell_formatters)
     return 0
 

@@ -71,7 +71,7 @@ def handle_ceremony(args: argparse.Namespace) -> int:
         return 1
 
     by_athlete = args.athlete
-    gender_filter = "men" if (args.men and by_athlete) else "women" if by_athlete else ""
+    gender_filter = "men" if args.men else "women" if getattr(args, "women", False) else ""
     season_id = args.season or get_current_season_id()
 
     def normalize_country(value: str) -> str:

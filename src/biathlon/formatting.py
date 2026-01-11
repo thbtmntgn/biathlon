@@ -50,6 +50,11 @@ class Color:
         return f"{cls.BOLD_GREEN}{text}{cls.RESET}"
 
     @classmethod
+    def highlight_soft(cls, text: str) -> str:
+        """Apply a softer highlight style for related columns."""
+        return cls.rgb(text, (0, 170, 0), bold=False)
+
+    @classmethod
     def rgb(cls, text: str, color: tuple[int, int, int], bold: bool = False) -> str:
         """Apply a 24-bit color (optionally bold)."""
         if not cls.enabled():
@@ -125,6 +130,7 @@ def render_table(
     row_styles: list[str] | None = None,
     cell_formatters: list[Callable] | None = None,
     highlight_headers: list[int] | None = None,
+    highlight_header_styles: dict[int, str] | None = None,
 ) -> None:
     """Render tabular data either aligned (pretty) or TSV.
 
@@ -159,6 +165,12 @@ def render_table(
 
     def fmt_header(idx: int, h: str) -> str:
         text = str(h).ljust(widths[idx])
+        if highlight_header_styles and idx in highlight_header_styles:
+            style = highlight_header_styles[idx]
+            if style == "highlight":
+                return Color.highlight(text)
+            if style == "highlight_soft":
+                return Color.highlight_soft(text)
         if highlight_headers and idx in highlight_headers:
             return Color.highlight(text)
         return text

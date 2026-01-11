@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "biathlon"
-version = "1.1.0"
+version = "1.2.0"
 description = "CLI for exploring IBU biathlon results from biathlonresults.com"
 readme = "README.md"
 license = "MIT"

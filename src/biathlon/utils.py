@@ -63,6 +63,61 @@ def parse_misses(value: str | None) -> int | None:
     return sum(int(d) for d in digits)
 
 
+def parse_relay_shooting(value: str | None) -> tuple[int, int] | None:
+    """Parse relay shooting format 'P+S' into (penalties, spares) tuple.
+
+    In relays, format is 'penalties+spare_rounds' e.g. '2+3' means
+    2 penalty loops and 3 spare rounds used.
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    if "+" not in text:
+        return None
+    parts = text.split("+")
+    if len(parts) != 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
+
+def parse_relay_shootings(value: str | None) -> tuple[tuple[int, int], tuple[int, int]] | None:
+    """Parse relay Shootings format 'P+S P+S' into ((prone_p, prone_s), (stand_p, stand_s)).
+
+    Returns tuple of (prone, standing) where each is (penalties, spares).
+    """
+    if not value:
+        return None
+    text = str(value).strip()
+    parts = text.split()
+    if len(parts) != 2:
+        return None
+    prone = parse_relay_shooting(parts[0])
+    standing = parse_relay_shooting(parts[1])
+    if prone is None or standing is None:
+        return None
+    return (prone, standing)
+
+
+def format_relay_shooting(penalties: int, spares: int) -> str:
+    """Format penalties and spares as 'P+S' string."""
+    return f"{penalties}+{spares}"
+
+
+def add_relay_shootings(
+    shootings: list[tuple[int, int] | None],
+) -> tuple[int, int]:
+    """Sum multiple relay shooting tuples into total (penalties, spares)."""
+    total_p, total_s = 0, 0
+    for s in shootings:
+        if s:
+            total_p += s[0]
+            total_s += s[1]
+    return (total_p, total_s)
+
+
 def is_dns(result: dict) -> bool:
     """Return True if result represents DNS (did not start) or similar."""
     irm = str(result.get("IRM") or "").upper()

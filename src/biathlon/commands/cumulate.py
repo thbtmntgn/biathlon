@@ -15,11 +15,12 @@ from ..api import (
     get_races,
 )
 from ..constants import GENDER_TO_CAT, INDIVIDUAL_DISCIPLINES, RELAY_DISCIPLINE, SHOTS_PER_DISCIPLINE
-from ..formatting import format_seconds, is_pretty_output, rank_style, render_table
+from ..formatting import Color, format_seconds, is_pretty_output, rank_style, render_table
 from ..utils import (
     base_time_seconds,
     extract_results,
     get_first_time,
+    get_race_label,
     parse_misses,
     parse_time_seconds,
     result_seconds,
@@ -118,8 +119,12 @@ def cumulate_across_races(
     """Generic cumulation helper returning rows, race count, gender label, season id, scope label, type label."""
     season_id = args.season or get_current_season_id()
     gender = "men" if args.men else "women"
-    resolved_type = "all" if args.event else (args.discipline or "sprint")
-    disciplines = selected_disciplines(resolved_type)
+    if args.event:
+        resolved_type = "all"
+        disciplines = INDIVIDUAL_DISCIPLINES.copy()
+    else:
+        resolved_type = args.discipline or "all"
+        disciplines = selected_disciplines(resolved_type)
     position_mode = accumulator in {"ski", "time", "range", "shooting", "penalty"} and getattr(args, "position", False)
     min_races_required = getattr(args, "min_race", 0) if position_mode else 0
     cat_id = GENDER_TO_CAT.get(gender.lower())
@@ -127,13 +132,8 @@ def cumulate_across_races(
     scope_label = ""
 
     if args.event:
-        event_list = get_events(season_id, level=1)
-        matching = next((ev for ev in event_list if ev.get("EventId") == args.event), None)
-        if matching:
-            scope_label = matching.get("ShortDescription") or matching.get("Organizer") or args.event
-            events = [matching]
-        else:
-            events = [{"EventId": args.event, "SeasonId": season_id}]
+        scope_label = args.event
+        events = [{"EventId": args.event}]
     else:
         events = get_events(season_id, level=1)
 
@@ -143,6 +143,41 @@ def cumulate_across_races(
     totals: dict[str, dict] = {}
     total_races = 0
 
+    def stage_counts(shootings: str | None, default_shots: int) -> tuple[int, int, int, int, int]:
+        """Return (miss_prone, miss_standing, shot_prone, shot_standing, shots_total)."""
+        miss_prone = miss_standing = 0
+        shot_prone = shot_standing = 0
+        shots_total = 0
+        if shootings:
+            parts = [p.strip() for p in str(shootings).split("+") if p.strip()]
+            miss_parts = []
+            for part in parts:
+                try:
+                    miss_parts.append(int(part))
+                except ValueError:
+                    miss_parts.append(0)
+            shots_total = len(parts) * 5
+            if len(miss_parts) >= 4:
+                miss_prone = miss_parts[0] + miss_parts[1]
+                miss_standing = miss_parts[2] + miss_parts[3]
+                shot_prone = 10
+                shot_standing = 10
+            elif len(miss_parts) == 3:
+                miss_prone = miss_parts[0] + miss_parts[1]
+                miss_standing = miss_parts[2]
+                shot_prone = 10
+                shot_standing = 5
+            elif len(miss_parts) == 2:
+                miss_prone = miss_parts[0]
+                miss_standing = miss_parts[1]
+                shot_prone = 5
+                shot_standing = 5
+            elif len(miss_parts) == 1:
+                miss_prone = miss_parts[0]
+                shot_prone = 5
+        else:
+            shots_total = default_shots
+        return miss_prone, miss_standing, shot_prone, shot_standing, shots_total
     for event in events:
         event_id = event.get("EventId")
         if not event_id:
@@ -222,6 +257,8 @@ def cumulate_across_races(
                     "nat": res.get("Nat") or "",
                     "races": 0, "time": 0.0, "misses": 0, "shots": 0,
                     "pos_total": 0.0, "pos_races": 0,
+                    "miss_prone": 0, "miss_standing": 0,
+                    "shot_prone": 0, "shot_standing": 0,
                 })
 
                 if accumulator == "time":
@@ -271,10 +308,23 @@ def cumulate_across_races(
                     if position_mode:
                         race_times[ibuid] = secs
                 elif accumulator == "miss":
-                    misses = parse_misses(res.get("ShootingTotal"))
+                    shooting_total = res.get("ShootingTotal")
+                    shootings = res.get("Shootings")
+                    miss_prone, miss_standing, shot_prone, shot_standing, shots_total = stage_counts(
+                        shootings, default_shots
+                    )
+                    misses = parse_misses(shooting_total)
+                    if misses is None:
+                        misses = (miss_prone + miss_standing) if shootings else None
                     if misses is None:
                         continue
                     entry["misses"] += misses
+                    entry["miss_prone"] += miss_prone
+                    entry["miss_standing"] += miss_standing
+                    entry["shot_prone"] += shot_prone
+                    entry["shot_standing"] += shot_standing
+                    if shots_total:
+                        entry["shots"] += shots_total
                     entry["races"] += 1
                     race_used = True
                 elif accumulator in {"shooting", "range", "ski"}:
@@ -298,26 +348,24 @@ def cumulate_across_races(
                     entry.setdefault("time", 0.0)
                     entry["time"] += secs
 
-                    if accumulator == "shooting":
+                    if accumulator in {"shooting", "range"}:
                         shooting_total = res.get("ShootingTotal")
-                        miss_val = parse_misses(shooting_total)
                         shootings = res.get("Shootings")
-                        shots_taken = 0
-                        if shootings:
-                            parts = [p.strip() for p in shootings.split("+") if p.strip()]
-                            shots_taken = len(parts) * 5
-                            if miss_val is None:
-                                try:
-                                    miss_val = sum(int(p) for p in parts if p.isdigit())
-                                except ValueError:
-                                    miss_val = None
-                        elif miss_val is not None:
-                            shots_taken = default_shots
+                        miss_prone, miss_standing, shot_prone, shot_standing, shots_total = stage_counts(
+                            shootings, default_shots
+                        )
+                        miss_val = parse_misses(shooting_total)
+                        if miss_val is None:
+                            miss_val = (miss_prone + miss_standing) if shootings else None
                         if miss_val is not None:
                             entry["misses"] += miss_val
-                        if shots_taken:
-                            entry["shots"] += shots_taken
-                        if position_mode:
+                        entry["miss_prone"] += miss_prone
+                        entry["miss_standing"] += miss_standing
+                        entry["shot_prone"] += shot_prone
+                        entry["shot_standing"] += shot_standing
+                        if shots_total:
+                            entry["shots"] += shots_total
+                        if accumulator == "shooting" and position_mode:
                             race_times[ibuid] = secs
                     if accumulator == "range" and position_mode:
                         race_times[ibuid] = secs
@@ -339,6 +387,8 @@ def cumulate_across_races(
                         "nat": res.get("Nat") or "",
                         "races": 0, "time": 0.0, "misses": 0, "shots": 0,
                         "pos_total": 0.0, "pos_races": 0,
+                        "miss_prone": 0, "miss_standing": 0,
+                        "shot_prone": 0, "shot_standing": 0,
                     })
                     entry["pos_total"] += missing_start + missing_idx + 1
                     entry["pos_races"] += 1
@@ -357,6 +407,8 @@ def cumulate_across_races(
                         "nat": res.get("Nat") or "",
                         "races": 0, "time": 0.0, "misses": 0, "shots": 0,
                         "pos_total": 0.0, "pos_races": 0,
+                        "miss_prone": 0, "miss_standing": 0,
+                        "shot_prone": 0, "shot_standing": 0,
                     })
                     entry["pos_total"] += idx
                     entry["pos_races"] += 1
@@ -387,10 +439,34 @@ def cumulate_across_races(
                 continue
             rows.append(entry)
 
+    top_n = getattr(args, "top", 0)
+    if top_n and top_n > 0:
+        try:
+            cup_id = find_cup_id(season_id, gender, level=1, cup_type="total")
+            cup_payload = get_cup_results(cup_id)
+            cup_rows = cup_payload.get("Rows") or cup_payload.get("Results") or []
+            cup_ranks = {
+                (r.get("Name") or r.get("ShortName") or ""): str(
+                    r.get("Rank") or r.get("ResultOrder") or idx
+                )
+                for idx, r in enumerate(cup_rows, start=1)
+            }
+            top_names = {r.get("Name") or r.get("ShortName") or "" for r in cup_rows[:top_n]}
+            rows = [row for row in rows if row.get("name") in top_names]
+            for row in rows:
+                row["wc_rank"] = cup_ranks.get(row.get("name", ""), "-")
+        except BiathlonError:
+            pass
+
     return rows, total_races, gender, season_id, scope_label, resolved_type
 
 
-def handle_cumulate_time_generic(args: argparse.Namespace, label: str, accumulator: str) -> int:
+def handle_cumulate_time_generic(
+    args: argparse.Namespace,
+    label: str,
+    accumulator: str,
+    show_accuracy: bool = False,
+) -> int:
     """Generic handler for cumulative time rankings."""
     position_mode = getattr(args, "position", False)
     rows, total_races, gender, season_id, scope_label, resolved_type = cumulate_across_races(args, accumulator)
@@ -408,9 +484,15 @@ def handle_cumulate_time_generic(args: argparse.Namespace, label: str, accumulat
     if position_mode:
         rows.sort(key=lambda row: (row["avg_pos"], -row["races"], row["name"]), reverse=getattr(args, "reverse", False))
         headers = ["Rank", "Name", "Country", "Races", "AvgPosition"]
+        if getattr(args, "top", 0):
+            headers.insert(3, "WCRank")
     else:
         rows.sort(key=lambda row: row.get("time", 0), reverse=getattr(args, "reverse", False))
         headers = ["Rank", "Name", "Country", "Races", "TotalTime"]
+        if getattr(args, "top", 0):
+            headers.insert(3, "WCRank")
+        if show_accuracy:
+            headers.extend(["Accuracy %", "Prone %", "Standing %"])
 
     # Apply display limit
     limit_n = getattr(args, "limit", 25) or 0
@@ -418,15 +500,32 @@ def handle_cumulate_time_generic(args: argparse.Namespace, label: str, accumulat
         rows = rows[:limit_n]
 
     if position_mode:
-        render_rows = [
-            [idx + 1, row["name"], row["nat"], row["races"], f"{row['avg_pos']:.2f}"]
-            for idx, row in enumerate(rows)
-        ]
+        render_rows = []
+        for idx, row in enumerate(rows):
+            render_row = [idx + 1, row["name"], row["nat"]]
+            if getattr(args, "top", 0):
+                render_row.append(row.get("wc_rank", "-"))
+            render_row.extend([row["races"], f"{row['avg_pos']:.2f}"])
+            render_rows.append(render_row)
     else:
-        render_rows = [
-            [idx + 1, row["name"], row["nat"], row["races"], format_seconds(row.get("time", 0))]
-            for idx, row in enumerate(rows)
-        ]
+        render_rows = []
+        for idx, row in enumerate(rows):
+            render_row = [idx + 1, row["name"], row["nat"]]
+            if getattr(args, "top", 0):
+                render_row.append(row.get("wc_rank", "-"))
+            render_row.extend([row["races"], format_seconds(row.get("time", 0))])
+            if show_accuracy:
+                shots = row.get("shots", 0)
+                misses = row.get("misses", 0)
+                acc = "-" if not shots else f"{(1 - (misses / shots)) * 100:.1f}%"
+                shot_prone = row.get("shot_prone", 0)
+                miss_prone = row.get("miss_prone", 0)
+                acc_prone = "-" if not shot_prone else f"{(1 - (miss_prone / shot_prone)) * 100:.1f}%"
+                shot_standing = row.get("shot_standing", 0)
+                miss_standing = row.get("miss_standing", 0)
+                acc_standing = "-" if not shot_standing else f"{(1 - (miss_standing / shot_standing)) * 100:.1f}%"
+                render_row.extend([acc, acc_prone, acc_standing])
+            render_rows.append(render_row)
 
     scope = scope_label or (f"event {args.event}" if args.event else f"season {season_id}")
     note = "" if position_mode else f" (must start all {total_races} races)"
@@ -460,11 +559,33 @@ def handle_cumulate_miss(args: argparse.Namespace) -> int:
     if limit_n > 0:
         rows = rows[:limit_n]
 
-    headers = ["Rank", "Name", "Country", "Races", "Misses"]
-    render_rows = [
-        [idx + 1, row["name"], row["nat"], row["races"], row["misses"]]
-        for idx, row in enumerate(rows)
-    ]
+    headers = ["Rank", "Name", "Country", "Races", "Misses", "Prone", "Standing", "Accuracy %", "Prone %", "Standing %"]
+    if getattr(args, "top", 0):
+        headers.insert(3, "WCRank")
+    render_rows = []
+    for idx, row in enumerate(rows):
+        render_row = [idx + 1, row["name"], row["nat"]]
+        if getattr(args, "top", 0):
+            render_row.append(row.get("wc_rank", "-"))
+        shots = row.get("shots", 0)
+        misses = row.get("misses", 0)
+        acc = "-" if not shots else f"{(1 - (misses / shots)) * 100:.1f}%"
+        shot_prone = row.get("shot_prone", 0)
+        miss_prone = row.get("miss_prone", 0)
+        acc_prone = "-" if not shot_prone else f"{(1 - (miss_prone / shot_prone)) * 100:.1f}%"
+        shot_standing = row.get("shot_standing", 0)
+        miss_standing = row.get("miss_standing", 0)
+        acc_standing = "-" if not shot_standing else f"{(1 - (miss_standing / shot_standing)) * 100:.1f}%"
+        render_row.extend([
+            row["races"],
+            row["misses"],
+            row.get("miss_prone", 0),
+            row.get("miss_standing", 0),
+            acc,
+            acc_prone,
+            acc_standing,
+        ])
+        render_rows.append(render_row)
 
     scope = scope_label or (f"event {args.event}" if args.event else f"season {season_id}")
     print(f"# Cumulative misses {resolved_type} — {gender} — {scope} (must start all {total_races} races)")
@@ -492,7 +613,7 @@ def handle_cumulate_shooting(args: argparse.Namespace) -> int:
         return (1 - (row.get("misses", 0) / shots)) if shots else None
 
     # Apply display limit
-    first_n = getattr(args, "first", 25) or 0
+    first_n = getattr(args, "limit", 25) or 0
 
     if position_mode:
         sort_opt = (args.sort or "position").lower()
@@ -508,12 +629,31 @@ def handle_cumulate_shooting(args: argparse.Namespace) -> int:
             display_rows = base_sorted
         if first_n > 0:
             display_rows = display_rows[:first_n]
-        headers = ["Rank", "Name", "Country", "Races", "AvgPosition", "Accuracy"]
-        render_rows = [
-            [row.get("rank_saved", idx), row["name"], row["nat"], row["races"],
-             f"{row['avg_pos']:.2f}", "-" if acc_value(row) is None else f"{acc_value(row) * 100:.1f}%"]
-            for idx, row in enumerate(display_rows, start=1)
-        ]
+        headers = ["Rank", "Name", "Country", "Races", "AvgPosition", "Accuracy %", "Prone %", "Standing %"]
+        if getattr(args, "top", 0):
+            headers.insert(3, "WCRank")
+        render_rows = []
+        for idx, row in enumerate(display_rows, start=1):
+            render_row = [row.get("rank_saved", idx), row["name"], row["nat"]]
+            if getattr(args, "top", 0):
+                render_row.append(row.get("wc_rank", "-"))
+            shots = row.get("shots", 0)
+            misses = row.get("misses", 0)
+            acc = "-" if not shots else f"{(1 - (misses / shots)) * 100:.1f}%"
+            shot_prone = row.get("shot_prone", 0)
+            miss_prone = row.get("miss_prone", 0)
+            acc_prone = "-" if not shot_prone else f"{(1 - (miss_prone / shot_prone)) * 100:.1f}%"
+            shot_standing = row.get("shot_standing", 0)
+            miss_standing = row.get("miss_standing", 0)
+            acc_standing = "-" if not shot_standing else f"{(1 - (miss_standing / shot_standing)) * 100:.1f}%"
+            render_row.extend([
+                row["races"],
+                f"{row['avg_pos']:.2f}",
+                acc,
+                acc_prone,
+                acc_standing,
+            ])
+            render_rows.append(render_row)
     else:
         sort_key = (args.sort or "shootingtime").lower()
         if sort_key not in {"shootingtime", "misses"}:
@@ -525,11 +665,25 @@ def handle_cumulate_shooting(args: argparse.Namespace) -> int:
         display_rows = sorted(rows, key=lambda row: (row.get("misses", 0), row.get("time", 0), row["rank_saved"])) if sort_key == "misses" else base_sorted
         if first_n > 0:
             display_rows = display_rows[:first_n]
-        headers = ["Rank", "Name", "Country", "Races", "ShootingTime", "Misses"]
-        render_rows = [
-            [row["rank_saved"], row["name"], row["nat"], row["races"], format_seconds(row.get("time", 0)), row.get("misses", 0)]
-            for row in display_rows
-        ]
+        headers = ["Rank", "Name", "Country", "Races", "ShootingTime", "Accuracy %", "Prone %", "Standing %"]
+        if getattr(args, "top", 0):
+            headers.insert(3, "WCRank")
+        render_rows = []
+        for row in display_rows:
+            render_row = [row["rank_saved"], row["name"], row["nat"]]
+            if getattr(args, "top", 0):
+                render_row.append(row.get("wc_rank", "-"))
+            shots = row.get("shots", 0)
+            misses = row.get("misses", 0)
+            acc = "-" if not shots else f"{(1 - (misses / shots)) * 100:.1f}%"
+            shot_prone = row.get("shot_prone", 0)
+            miss_prone = row.get("miss_prone", 0)
+            acc_prone = "-" if not shot_prone else f"{(1 - (miss_prone / shot_prone)) * 100:.1f}%"
+            shot_standing = row.get("shot_standing", 0)
+            miss_standing = row.get("miss_standing", 0)
+            acc_standing = "-" if not shot_standing else f"{(1 - (miss_standing / shot_standing)) * 100:.1f}%"
+            render_row.extend([row["races"], format_seconds(row.get("time", 0)), acc, acc_prone, acc_standing])
+            render_rows.append(render_row)
 
     scope = scope_label or (f"event {args.event}" if args.event else f"season {season_id}")
     note = "" if position_mode else f" (must start all {total_races} races)"
@@ -543,7 +697,7 @@ def handle_cumulate_shooting(args: argparse.Namespace) -> int:
 
 def handle_cumulate_range(args: argparse.Namespace) -> int:
     """Compute cumulative range time ranking."""
-    return handle_cumulate_time_generic(args, "range time", "range")
+    return handle_cumulate_time_generic(args, "range time", "range", show_accuracy=True)
 
 
 def handle_cumulate_ski(args: argparse.Namespace) -> int:
@@ -563,6 +717,8 @@ def handle_cumulate_remontada(args: argparse.Namespace) -> int:
     cat_id = GENDER_TO_CAT.get(gender.lower())
     totals: dict[str, dict] = {}
     total_races = 0
+    race_order: list[str] = []
+    race_labels: dict[str, str] = {}
 
     def as_int(value) -> int | None:
         try:
@@ -585,12 +741,23 @@ def handle_cumulate_remontada(args: argparse.Namespace) -> int:
             except BiathlonError:
                 continue
             comp = payload.get("Competition") or {}
+            sport_evt = payload.get("SportEvt") or {}
             comp_cat = str(comp.get("catId") or comp.get("CatId") or "").upper()
             if comp_cat and comp_cat != cat_id:
                 continue
             results = extract_results(payload)
             if not results:
                 continue
+            race_label = (
+                sport_evt.get("Organizer")
+                or sport_evt.get("ShortDescription")
+                or comp.get("Organizer")
+                or comp.get("Venue")
+                or comp.get("ShortDescription")
+                or comp.get("Description")
+                or get_race_label(race)
+                or str(race_id)
+            )
             race_used = False
             for res in results:
                 status = str(res.get("IRM") or "").upper()
@@ -609,13 +776,17 @@ def handle_cumulate_remontada(args: argparse.Namespace) -> int:
                     continue
                 entry = totals.setdefault(ident, {
                     "name": res.get("Name") or res.get("ShortName") or "",
-                    "nat": res.get("Nat") or "", "gain": 0, "races": 0,
+                    "nat": res.get("Nat") or "", "gain": 0, "races": 0, "gains": {},
                 })
                 entry["gain"] += gain
                 entry["races"] += 1
+                entry["gains"][race_id] = gain
                 race_used = True
             if race_used:
                 total_races += 1
+                if race_id not in race_labels:
+                    race_labels[race_id] = race_label
+                    race_order.append(race_id)
 
     if total_races == 0:
         print("no pursuit races found for remontada", file=sys.stderr)
@@ -652,16 +823,68 @@ def handle_cumulate_remontada(args: argparse.Namespace) -> int:
     if limit_n > 0:
         rows = rows[:limit_n]
 
-    headers = ["Rank", "Name", "Country", "Races", "Gain", "WCRank"]
-    render_rows = [
-        [idx + 1, row["name"], row["nat"], row["races"],
-         f"+{row['gain']}" if row["gain"] > 0 else str(row["gain"]),
-         cup_rankings.get(row["name"], "-")]
-        for idx, row in enumerate(rows)
-    ]
+    headers = ["Rank", "Name", "Country", "WCRank", "Races", "Gain"]
+    headers.extend([race_labels[race_id] for race_id in race_order])
+    render_rows = []
+    for idx, row in enumerate(rows):
+        base_row = [
+            idx + 1,
+            row["name"],
+            row["nat"],
+            cup_rankings.get(row["name"], "-"),
+            row["races"],
+            f"+{row['gain']}" if row["gain"] > 0 else str(row["gain"]),
+        ]
+        detail_cells = []
+        for race_id in race_order:
+            gain = row["gains"].get(race_id)
+            if gain is None:
+                detail_cells.append("-")
+            else:
+                detail_cells.append(f"+{gain}" if gain > 0 else str(gain))
+        render_rows.append(base_row + detail_cells)
 
     print(f"# Cumulative remontada — {gender} — season {season_id} (pursuit races)")
     pretty = is_pretty_output(args)
     row_styles = [rank_style(idx + 1) for idx in range(len(render_rows))] if pretty else None
-    render_table(headers, render_rows, pretty=pretty, row_styles=row_styles)
+
+    cell_formatters = None
+    if pretty:
+        max_gain = max((abs(row["gain"]) for row in rows), default=0)
+        max_detail = max(
+            (abs(val) for row in rows for val in row["gains"].values()),
+            default=0,
+        )
+
+        def gain_formatter(cell_str: str, row_idx: int) -> str:
+            try:
+                raw = int(str(cell_str).strip())
+            except ValueError:
+                return cell_str
+            if raw == 0:
+                return cell_str
+            intensity = abs(raw) / max_gain if max_gain > 0 else 0
+            return Color.green(cell_str, intensity) if raw > 0 else Color.red(cell_str, intensity)
+
+        def detail_formatter(cell_str: str, row_idx: int) -> str:
+            if cell_str.strip() == "-":
+                return cell_str
+            try:
+                raw = int(str(cell_str).strip())
+            except ValueError:
+                return cell_str
+            if raw == 0:
+                return cell_str
+            intensity = abs(raw) / max_detail if max_detail > 0 else 0
+            return Color.green(cell_str, intensity) if raw > 0 else Color.red(cell_str, intensity)
+
+        cell_formatters = [None] * len(headers)
+        gain_idx = headers.index("Gain")
+        first_detail_idx = headers.index(race_labels[race_order[0]]) if race_order else None
+        cell_formatters[gain_idx] = gain_formatter
+        if first_detail_idx is not None:
+            for idx in range(first_detail_idx, len(headers)):
+                cell_formatters[idx] = detail_formatter
+
+    render_table(headers, render_rows, pretty=pretty, row_styles=row_styles, cell_formatters=cell_formatters)
     return 0
