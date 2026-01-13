@@ -65,7 +65,7 @@ def find_cup_id(season_id: str, gender: str, level: int, cup_type: str) -> str:
     )
 
 
-def _get_cup_ids_by_discipline(season_id: str, gender: str, level: int) -> Dict[str, str]:
+def _get_cup_ids_by_discipline(season_id: str, gender: str, level: int) -> dict[str, str]:
     """Return dict of discipline -> cup_id for a season/gender/level."""
     cat_id = GENDER_TO_CAT.get(gender.lower())
     if not cat_id:
@@ -131,7 +131,7 @@ def handle_scores(args: argparse.Namespace) -> int:
         return 1
 
     # Build athlete data from total standings
-    athletes: Dict[str, dict] = {}
+    athletes: dict[str, dict] = {}
     for row in total_rows:
         ibu_id = row.get("IBUId") or row.get("Id") or row.get("Name")
         if not ibu_id:

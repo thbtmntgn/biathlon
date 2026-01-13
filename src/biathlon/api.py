@@ -7,6 +7,7 @@ import socket
 from collections.abc import Iterable
 from typing import Any
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
 from urllib.request import urlopen
 
 API_BASE = "https://biathlonresults.com/modules/sportapi/api"
@@ -89,3 +90,17 @@ def get_analytic_results(race_id: str, type_id: str) -> dict[str, Any]:
 def get_athlete_bio(ibu_id: str) -> dict[str, Any]:
     """Return CIS bio information for an athlete by IBU id."""
     return dict(fetch_json(f"CISBios?IBUId={ibu_id}"))
+
+
+def get_athletes(family_name: str, given_name: str = "", request_id: int = 0) -> list[dict[str, Any]]:
+    """Search athletes by family/given name."""
+    query = urlencode({
+        "FamilyName": family_name,
+        "GivenName": given_name,
+        "RequestId": request_id,
+    })
+    payload = fetch_json(f"Athletes?{query}")
+    if isinstance(payload, dict):
+        athletes = payload.get("Athletes") or payload.get("athletes") or []
+        return list(athletes)
+    return list(payload)

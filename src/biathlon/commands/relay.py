@@ -28,27 +28,11 @@ from ..utils import (
     format_relay_shooting,
     get_first_time,
     get_race_start_key,
+    parse_start_datetime,
     parse_relay_shooting,
     parse_relay_shootings,
     parse_time_seconds,
 )
-
-
-def _parse_start_datetime(value: str | None) -> datetime.datetime | None:
-    """Parse a start time string into a datetime object."""
-    if not value:
-        return None
-    text = value.strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1]
-    try:
-        if "T" in text:
-            return datetime.datetime.fromisoformat(text)
-        return datetime.datetime.fromisoformat(f"{text}T00:00:00")
-    except ValueError:
-        return None
 
 
 def _fetch_analytic_times(race_id: str, type_id: str) -> dict[tuple[str, int], float]:
@@ -173,7 +157,7 @@ def _find_latest_relay_race(
             continue
         comp = payload.get("Competition") or {}
         start_raw = comp.get("StartTime") or start_key
-        start_dt = _parse_start_datetime(start_raw if isinstance(start_raw, str) else None)
+        start_dt = parse_start_datetime(start_raw if isinstance(start_raw, str) else None)
         if start_dt and start_dt > now:
             continue
         if _has_completed_results(payload):
