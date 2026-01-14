@@ -78,12 +78,10 @@ Show results for a specific race id:
 biathlon results --race BT2526SWRLCP01SWSP
 ```
 
-Show ski/range/shooting time breakdowns for a race:
+Show detailed split times for a race:
 
 ```bash
-biathlon results ski --race BT2526SWRLCP03SMMS
-biathlon results range --race BT2526SWRLCP03SMMS
-biathlon results shooting --race BT2526SWRLCP03SMMS
+biathlon results --race BT2526SWRLCP03SMMS --detail
 ```
 
 Show World Cup total standings (women, current season by default):
@@ -109,7 +107,8 @@ biathlon relay --mixed
 Show biathlete information:
 
 ```bash
-biathlon biathlete --search "boe johannes"
+biathlon biathlete info --search "boe johannes"
+biathlon biathlete id --search "boe"
 biathlon biathlete results --id BTFRA12305199301
 ```
 

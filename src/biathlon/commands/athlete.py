@@ -5,7 +5,16 @@ from __future__ import annotations
 import argparse
 import sys
 
-from ..api import BiathlonError, get_athlete_bio, get_current_season_id, get_events, get_race_results, get_races
+from ..api import (
+    BiathlonError,
+    get_athlete_bio,
+    get_athletes,
+    get_current_season_id,
+    get_events,
+    get_race_results,
+    get_races,
+    get_analytic_results,
+)
 from ..constants import RELAY_DISCIPLINE
 from ..formatting import is_pretty_output, render_table
 from ..utils import (
@@ -37,6 +46,16 @@ def handle_athlete_results(args: argparse.Namespace) -> int:
     race_entries: list[dict] = []
     athlete_map: dict[str, dict] = {}
 
+    def has_analytics(race_id: str) -> bool:
+        for type_id in ("CRST", "RNGT", "SHTT"):
+            try:
+                analytic = get_analytic_results(race_id, type_id)
+            except BiathlonError:
+                return True
+            if analytic.get("Results"):
+                return True
+        return False
+
     for event in events:
         event_id = event.get("EventId")
         if not event_id:
@@ -46,6 +65,8 @@ def handle_athlete_results(args: argparse.Namespace) -> int:
         for race in sorted(get_races(event_id), key=get_race_start_key):
             race_id = race.get("RaceId") or race.get("Id")
             if not race_id:
+                continue
+            if not has_analytics(race_id):
                 continue
             try:
                 payload = get_race_results(race_id)
@@ -137,6 +158,94 @@ def handle_athlete_results(args: argparse.Namespace) -> int:
     return 0
 
 
+def _find_athletes_by_search(season_id: str, levels: list[int], term: str) -> dict[str, dict]:
+    matches: dict[str, dict] = {}
+    for lvl in levels:
+        for event in get_events(season_id, level=lvl):
+            event_id = event.get("EventId")
+            if not event_id:
+                continue
+            for race in get_races(event_id):
+                race_id = race.get("RaceId") or race.get("Id")
+                if not race_id:
+                    continue
+                try:
+                    payload = get_race_results(race_id)
+                except BiathlonError:
+                    continue
+                for res in extract_results(payload):
+                    name = res.get("Name") or res.get("ShortName") or ""
+                    if term.lower() in name.lower():
+                        ident = res.get("IBUId")
+                        if ident:
+                            matches.setdefault(ident, {"name": name, "nat": res.get("Nat") or ""})
+    return matches
+
+
+def handle_athlete_id(args: argparse.Namespace) -> int:
+    """Show IBU ids for athletes matching a search term."""
+    if not args.search:
+        print("error: provide --search", file=sys.stderr)
+        return 1
+
+    season_id = args.season or get_current_season_id()
+    level_arg = getattr(args, "level", 0)
+    levels = [level_arg] if level_arg in {1, 2, 3, 4, 5} else [1, 2, 3, 4, 5]
+    matches: dict[str, dict] = {}
+    search_term = args.search.strip()
+    tokens = [tok for tok in search_term.split() if tok]
+    family_name = tokens[-1] if tokens else search_term
+    given_name = " ".join(tokens[:-1]) if len(tokens) > 1 else ""
+    try:
+        def add_matches(athletes: list[dict]) -> None:
+            for athlete in athletes:
+                if not isinstance(athlete, dict):
+                    continue
+                ibu_id = athlete.get("IBUId") or athlete.get("IbuId") or ""
+                if not ibu_id:
+                    continue
+                given = athlete.get("GivenName") or ""
+                family = athlete.get("FamilyName") or ""
+                name = athlete.get("Name") or " ".join(part for part in [given, family] if part)
+                nat = athlete.get("Nat") or athlete.get("Nation") or athlete.get("Country") or ""
+                if not nat and isinstance(athlete.get("NF"), dict):
+                    nat = athlete["NF"].get("Nat") or athlete["NF"].get("Country") or ""
+                matches.setdefault(ibu_id, {"name": name or f"IBU {ibu_id}", "nat": nat})
+
+        add_matches(get_athletes(family_name, given_name))
+        if search_term and not given_name:
+            add_matches(get_athletes(search_term, ""))
+            add_matches(get_athletes("", search_term))
+    except BiathlonError:
+        matches = _find_athletes_by_search(season_id, levels, search_term)
+
+    if not matches:
+        print(f"no athletes matched search '{args.search}'", file=sys.stderr)
+        return 1
+
+    for ibu_id, meta in matches.items():
+        if meta.get("nat"):
+            continue
+        try:
+            bio = get_athlete_bio(ibu_id)
+        except BiathlonError:
+            continue
+        nat = bio.get("NAT") or ""
+        if nat:
+            meta["nat"] = nat
+
+    rows = []
+    for ibu_id, meta in sorted(matches.items(), key=lambda item: item[1].get("name", "")):
+        name = meta.get("name") or f"IBU {ibu_id}"
+        rows.append([name, meta.get("nat", ""), ibu_id])
+
+    print()
+    print("# Athlete IBU ids")
+    render_table(["Name", "Country", "IBUId"], rows, pretty=is_pretty_output(args))
+    print()
+    return 0
+
+
 def handle_athlete_info(args: argparse.Namespace) -> int:
     """Show basic bio info for athletes."""
     if not args.id and not args.search:
@@ -147,29 +256,6 @@ def handle_athlete_info(args: argparse.Namespace) -> int:
     level_arg = getattr(args, "level", 0)
     levels = [level_arg] if level_arg in {1, 2, 3, 4, 5} else [1, 2, 3, 4, 5]
 
-    def find_by_search(term: str) -> dict[str, dict]:
-        matches: dict[str, dict] = {}
-        for lvl in levels:
-            for event in get_events(season_id, level=lvl):
-                event_id = event.get("EventId")
-                if not event_id:
-                    continue
-                for race in get_races(event_id):
-                    race_id = race.get("RaceId") or race.get("Id")
-                    if not race_id:
-                        continue
-                    try:
-                        payload = get_race_results(race_id)
-                    except BiathlonError:
-                        continue
-                    for res in extract_results(payload):
-                        name = res.get("Name") or res.get("ShortName") or ""
-                        if term.lower() in name.lower():
-                            ident = res.get("IBUId")
-                            if ident:
-                                matches.setdefault(ident, {"name": name, "nat": res.get("Nat") or ""})
-        return matches
-
     requested: dict[str, dict] = {}
     if args.id:
         for part in args.id.split(","):
@@ -177,7 +263,7 @@ def handle_athlete_info(args: argparse.Namespace) -> int:
             if ibu:
                 requested[ibu] = {}
     if args.search:
-        requested.update(find_by_search(args.search))
+        requested.update(_find_athletes_by_search(season_id, levels, args.search))
 
     if not requested:
         print("no athletes matched the provided criteria", file=sys.stderr)

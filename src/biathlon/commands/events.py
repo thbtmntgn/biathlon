@@ -103,15 +103,6 @@ def handle_events(args: argparse.Namespace) -> int:
     for season_id in seasons:
         events.extend(get_events(season_id, level_int))
 
-    def event_date(ev: dict) -> datetime.date | None:
-        start_raw = ev.get("StartDate") or ev.get("FirstCompetitionDate") or ""
-        if not start_raw:
-            return None
-        try:
-            return datetime.date.fromisoformat(start_raw.split("T", 1)[0])
-        except ValueError:
-            return None
-
     def date_only(value: str | None) -> str:
         return value.split("T", 1)[0] if isinstance(value, str) else ""
 
@@ -135,9 +126,32 @@ def handle_events(args: argparse.Namespace) -> int:
             # Fallback: just extract date part
             return value.split("T", 1)[0]
 
+    if args.completed and args.upcoming:
+        print("error: use only one of --completed or --upcoming", file=sys.stderr)
+        return 1
+
     if args.completed:
         today = datetime.date.today()
-        events = [ev for ev in events if (d := event_date(ev)) is not None and d <= today]
+        events = [
+            ev
+            for ev in events
+            if (
+                (end := parse_date(ev.get("EndDate")))
+                or (end := parse_date(ev.get("StartDate") or ev.get("FirstCompetitionDate")))
+            )
+            and end < today
+        ]
+    elif args.upcoming:
+        today = datetime.date.today()
+        events = [
+            ev
+            for ev in events
+            if (
+                (end := parse_date(ev.get("EndDate")))
+                or (end := parse_date(ev.get("StartDate") or ev.get("FirstCompetitionDate")))
+            )
+            and end >= today
+        ]
 
     pretty = is_pretty_output(args)
 
@@ -212,10 +226,10 @@ def _handle_events_summary(events: list[dict], pretty: bool, date_only) -> int:
             name = (race.get("RaceName") or race.get("ShortDescription") or race.get("Description") or "").lower()
             disc = (race.get("DisciplineId") or "").upper()
             gender_tag = ""
-            if "men" in name:
-                gender_tag = "M"
             if "women" in name or "women's" in name:
-                gender_tag = "W" if not gender_tag else "W+M"
+                gender_tag = "W"
+            elif "men" in name:
+                gender_tag = "M"
 
             if disc == "IN":
                 flags["individual"].add(gender_tag or "W+M")
