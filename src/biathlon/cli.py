@@ -7,8 +7,11 @@ import textwrap
 import sys
 from collections.abc import Iterable
 from importlib.metadata import version, PackageNotFoundError
+import io
+import contextlib
 
 from .api import BiathlonError
+from .markdown import to_markdown_table
 
 
 def get_version() -> str:
@@ -45,7 +48,13 @@ from .commands import (
 class CompactOptionalFormatter(argparse.RawTextHelpFormatter):
     """Formatter that groups optional flags before their metavar."""
 
-    def __init__(self, prog: str, indent_increment: int = 2, max_help_position: int = 40, width: int | None = None) -> None:
+    def __init__(
+        self,
+        prog: str,
+        indent_increment: int = 2,
+        max_help_position: int = 40,
+        width: int | None = None,
+    ) -> None:
         super().__init__(prog, indent_increment, max_help_position, width)
 
     def _format_action_invocation(self, action: argparse.Action) -> str:
@@ -91,7 +100,7 @@ def traverse_to_parser(
     return traverse_to_parser(choices[command], tokens[1:])
 
 
-BASH_COMPLETION = '''
+BASH_COMPLETION = """
 _biathlon_completion() {
     local cur prev commands subcommands
     COMPREPLY=()
@@ -125,9 +134,9 @@ _biathlon_completion() {
     fi
 }
 complete -F _biathlon_completion biathlon
-'''
+"""
 
-ZSH_COMPLETION = '''
+ZSH_COMPLETION = """
 #compdef biathlon
 
 _biathlon() {
@@ -169,7 +178,7 @@ _biathlon() {
 }
 
 _biathlon "$@"
-'''
+"""
 
 
 def print_completion(shell: str) -> int:
@@ -185,11 +194,30 @@ def print_completion(shell: str) -> int:
 
 
 def add_output_flag(subparser: argparse.ArgumentParser) -> None:
-    """Add --tsv flag to a subparser."""
+    """Add output-related flags to a subparser."""
     subparser.add_argument(
         "--tsv",
         action="store_true",
-        help="Output TSV instead of aligned table",
+        help="Output TSV instead of aligned table (legacy)",
+    )
+    subparser.add_argument(
+        "--format",
+        "-f",
+        choices=["table", "tsv", "markdown"],
+        default="table",
+        help="Output format: table (default), tsv, or markdown",
+    )
+    subparser.add_argument(
+        "--output",
+        "-o",
+        default="",
+        help="Write output to file (default: stdout)",
+    )
+    subparser.add_argument(
+        "--columns",
+        "-C",
+        default="",
+        help="Comma-separated list of column names to include (in this order) when using --format markdown",
     )
 
 
@@ -473,7 +501,9 @@ def build_parser() -> argparse.ArgumentParser:
     biathlete_parser.add_argument("--season", default="", help="Season id")
     add_output_flag(biathlete_parser)
     biathlete_parser.set_defaults(func=handle_athlete_info, athlete_command=None)
-    athlete_sub = biathlete_parser.add_subparsers(dest="athlete_command", title="subcommands", metavar="")
+    athlete_sub = biathlete_parser.add_subparsers(
+        dest="athlete_command", title="subcommands", metavar=""
+    )
 
     athlete_results = athlete_sub.add_parser("results", help="Season race ranks", formatter_class=CompactOptionalFormatter, add_help=False)
     athlete_results.add_argument("--id", default="", help="Athlete IBU id")
@@ -488,7 +518,9 @@ def build_parser() -> argparse.ArgumentParser:
     athlete_info.add_argument("--id", default="", help="Athlete IBU id (comma-separated)")
     athlete_info.add_argument("--search", default="", help="Search by name")
     athlete_info.add_argument("--season", default="", help="Season id")
-    athlete_info.add_argument("--level", type=int, default=0, help="Event level (1-5, 0 for all)")
+    athlete_info.add_argument(
+        "--level", type=int, default=0, help="Event level (1-5, 0 for all)"
+    )
     add_output_flag(athlete_info)
     athlete_info.set_defaults(func=handle_athlete_info)
 
@@ -525,6 +557,22 @@ def build_parser() -> argparse.ArgumentParser:
     record_lap.set_defaults(func=handle_record_lap)
 
     return parser
+
+
+def _tsv_to_markdown(tsv_text: str, columns: list[str] | None = None) -> str:
+    """Convert TSV text (headers in first line) into a Markdown table (optionally filter columns)."""
+    lines = [ln for ln in tsv_text.splitlines() if ln.strip()]
+    if not lines:
+        return ""
+    headers = [h.strip() for h in lines[0].split("\t")]
+    rows = [[cell.strip() for cell in ln.split("\t")] for ln in lines[1:]]
+    if columns:
+        requested = [c.strip() for c in columns if c.strip()]
+        # preserve order of requested list, skip names not present
+        indices = [headers.index(name) for name in requested if name in headers]
+        headers = [headers[i] for i in indices]
+        rows = [[r[i] for i in indices] for r in rows]
+    return to_markdown_table(headers, rows)
 
 
 def main(argv: Iterable[str] | None = None) -> int:
@@ -575,10 +623,31 @@ def main(argv: Iterable[str] | None = None) -> int:
         )
         return 2
 
-    if _require_subcommand(args):
-        return 2
-
     try:
+        if getattr(args, "format", "table") == "markdown":
+            args.tsv = True
+            buf = io.StringIO()
+            with contextlib.redirect_stdout(buf):
+                ret = args.func(args)
+            tsv_text = buf.getvalue()
+            cols = (
+                [c.strip() for c in args.columns.split(",")]
+                if getattr(args, "columns", "")
+                else None
+            )
+            md = _tsv_to_markdown(tsv_text, columns=cols)
+            if getattr(args, "output", ""):
+                with open(args.output, "w", encoding="utf-8") as f:
+                    f.write(md + "\n")
+            else:
+                print(md)
+            return ret
+
+        if getattr(args, "output", ""):
+            with open(args.output, "w", encoding="utf-8") as f:
+                with contextlib.redirect_stdout(f):
+                    return args.func(args)
+
         return args.func(args)
     except BiathlonError as exc:
         print(f"error: {exc}", file=sys.stderr)
